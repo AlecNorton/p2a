@@ -2,7 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-
+import re
+import math
 class Environment3D:
     def __init__(self):
         self.boundary = []
@@ -25,10 +26,26 @@ class Environment3D:
         self.boundary = [xmin, ymin, zmin, xmax, ymax, zmax]
         return True if successful, False otherwise (True if file was parsed successfully, without any error.)
         """
-
-        pass
+        try:
+            with open(filename, 'r') as f:
+                lines = f.readlines()
+                for line in lines:
+                    res = re.split(r"[\s]+", line)
+                    print(res)
+                    if('boundary' in res[0]):
+                        print("Found.")
+                        res = list(map(lambda x: float(x.replace('\n', '')), res[1:7]))
+                        self.boundary = res
+                    elif('block' in res[0]):
+                        print("Found block.")
+                        coords = list(map(lambda x: float(x.replace('\n', '')), res[1:7]))
+                        colors = list(map(lambda x: float(x.replace('\n', '')), res[7:10]))
+                        self.blocks.append(tuple((coords, colors)))
+            return True
+        except:
+            return False
     
-
+            
 
 
     ##############################################
@@ -40,7 +57,33 @@ class Environment3D:
         Complete implementation with collision checking
         return True if free, False if in collision
         """
-        pass
+        #Check x range, y range, and z range using nested if statements.
+        pointX, pointY, pointZ = point
+        if(self.is_point_in_boundary(point) == False):
+            return False
+        for block_and_color in self.blocks:
+            xmin, ymin, zmin, xmax, ymax, zmax = block_and_color[0]
+            if (pointX >= xmin-self.safety_margin and pointX <= xmax+self.safety_margin):
+                #Within range of X
+                if(pointY >= ymin-self.safety_margin and pointX <= ymax+self.safety_margin):
+                    #Within rangeo f Y
+                    if(pointZ >= zmin-self.safety_margin and pointZ <= zmax+self.safety_margin):
+                        #Within range of Z
+                        return False
+        return True
+
+    def is_point_in_boundary(self, point):
+        """
+        True if point is within boundary plus some safety_margin.
+        False if point is beyond bondary. """
+        pointX, pointY, pointZ = point
+        xmin, ymin, zmin, xmax, ymax, zmax = self.boundary
+        if(pointX >= xmin+self.safety_margin and pointX <=xmax-self.safety_margin):
+            if(pointY >= ymin+self.safety_margin and pointY <=ymax-self.safety_margin):
+                if(pointZ >= zmin+self.safety_margin and pointZ <=zmax-self.safety_margin):
+                    return True
+        return False
+            
     
 
 
@@ -53,8 +96,14 @@ class Environment3D:
         Used for RRT* edge validation
         return True if free, False if in collision
         """
-        pass
-    
+        #First simply check two points.
+        if(self.is_point_in_free_space(p1) == False or self.is_point_in_free_space(p2) == False):
+            return False
+        
+        else:
+            distance = math.dist(p1, p1)
+            numPoints = distance / .001 #Make a point along each mm of the line. 
+        
 
     
     def generate_random_free_point(self):
@@ -88,13 +137,13 @@ class Environment3D:
         xmin, ymin, zmin, xmax, ymax, zmax = self.boundary
         
         info = f"""
-Environment Information:
-  Boundary: [{xmin}, {ymin}, {zmin}] to [{xmax}, {ymax}, {zmax}]
-  Size: {xmax-xmin:.1f} x {ymax-ymin:.1f} x {zmax-zmin:.1f} meters
-  Volume: {(xmax-xmin)*(ymax-ymin)*(zmax-zmin):.1f} cubic meters
-  Obstacles: {len(self.blocks)} blocks
-  Safety margin: {self.safety_margin} meters
-"""
+        Environment Information:
+        Boundary: [{xmin}, {ymin}, {zmin}] to [{xmax}, {ymax}, {zmax}]
+        Size: {xmax-xmin:.1f} x {ymax-ymin:.1f} x {zmax-zmin:.1f} meters
+        Volume: {(xmax-xmin)*(ymax-ymin)*(zmax-zmin):.1f} cubic meters
+        Obstacles: {len(self.blocks)} blocks
+        Safety margin: {self.safety_margin} meters
+        """
         
         if self.start_point and self.goal_point:
             distance = np.linalg.norm(np.array(self.goal_point) - np.array(self.start_point))
