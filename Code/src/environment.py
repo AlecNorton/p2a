@@ -4,6 +4,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import re
 import math
+import numpy as np
 class Environment3D:
     def __init__(self):
         self.boundary = []
@@ -31,13 +32,10 @@ class Environment3D:
                 lines = f.readlines()
                 for line in lines:
                     res = re.split(r"[\s]+", line)
-                    print(res)
                     if('boundary' in res[0]):
-                        print("Found.")
                         res = list(map(lambda x: float(x.replace('\n', '')), res[1:7]))
                         self.boundary = res
                     elif('block' in res[0]):
-                        print("Found block.")
                         coords = list(map(lambda x: float(x.replace('\n', '')), res[1:7]))
                         colors = list(map(lambda x: float(x.replace('\n', '')), res[7:10]))
                         self.blocks.append(tuple((coords, colors)))
@@ -101,10 +99,96 @@ class Environment3D:
             return False
         
         else:
-            distance = math.dist(p1, p1)
-            numPoints = distance / .001 #Make a point along each mm of the line. 
-        
+            p1x, p1y, p1z = p1
+            p2x, p2y, p2z = p2
+            dist_vec = np.abs(np.subtract(p2, p1))
+            xDir = 1
+            yDir = 1
+            zDir = 1
+            if(p1x >= p2x):
+                xDir = -1
+            if(p1y >= p2y):
+                yDir = -1
+            if(p1z >= p2z):
+                zDir = -1
+            #num checks per one meter, i.e. 20 checks is a point every 5 cm. 
+            
+            num_cores = 5
+            x_core, y_core, z_core = np.divide(dist_vec, num_cores)
+            x_check, y_check, z_check = np.divide(dist_vec, num_checks)
 
+            checkingPoint = p1
+            for i in range(num_checks):
+                checkingPoint = np.add(checkingPoint, [checkingPoint[0]+(xDir*x_check*i), checkingPoint[1]+(yDir*y_check*i), checkingPoint[2]+(zDir*z_check*i)])
+                for j in range(num_cores):
+                    core_point = [checkingPoint[0]+(xDir*x_core*j), checkingPoint[1]+(yDir*y_core*j), checkingPoint[2]+(zDir*z_core*j)]
+                    if(self.is_point_in_free_space(core_point) == False):
+                        return False
+            return True
+                            
+
+    def visualize_environment(self, ax=None, show_start_goal = False):
+        """Visualize the environment"""
+        if ax is None:
+            fig = plt.figure(figsize=(12, 8))
+            ax = fig.add_subplot(111, projection='3d')
+            standalone = True
+        else:
+            standalone = False
+
+        verts = np.array([])
+        colors = []
+        for block_color in self.blocks:
+            coords = block_color[0]
+            color = np.divide(block_color[1], 255)
+            print(f"Color: {color}")
+            if(len(verts) == 0):
+                verts = self.list_of_coords(coords)
+            else:
+                verts = np.append(verts, self.list_of_coords(coords), axis = 0)
+            for i in range(6): #six sides
+                colors.append(color)
+        if (show_start_goal):
+            ax.scatter(self.start_point[0], self.start_point[1], self.start_point[2], s=100, color= 'red', marker = '*')
+            ax.scatter(self.goal_point[0], self.goal_point[1], self.goal_point[2], s=100, color= 'blue', marker = 'X')
+        poly = Poly3DCollection(verts, alpha = .9)
+        poly.set_facecolor(colors)
+        poly.set_edgecolor('black')
+        ax.add_collection(poly)
+        if standalone:
+            ax.set_xlabel('X (m)')
+            ax.set_ylabel('Y (m)')
+            ax.set_zlabel('Z (m)')
+            ax.set_title('Environment')
+            ax.set_xlim(self.boundary[0], self.boundary[0+3])
+            ax.set_ylim(self.boundary[1], self.boundary[1+3])
+            ax.set_zlim(self.boundary[2], self.boundary[2+3])
+            ax.set_ylim
+            ax.legend()
+            plt.tight_layout()
+            plt.show()
+
+        return ax
+        
+    def list_of_coords(self, coords):
+        xmin, ymin, zmin, xmax, ymax, zmax = coords
+        print(f"Coords: {coords}")
+        verts = []
+        for ax in 'xyz':
+            if(ax == 'x'):
+                face1 = [(xmin, ymin, zmin), (xmin, ymin, zmax), (xmin, ymax, zmax), (xmin, ymax, zmin), (xmin, ymin, zmin)]
+                face2 = [(xmax, ymin, zmin), (xmax, ymin, zmax), (xmax, ymax, zmax), (xmax, ymax, zmin), (xmax, ymin, zmin)]
+            elif(ax == 'y'):
+                face1 = [(xmin, ymin, zmin), (xmin, ymin, zmax), (xmax, ymin, zmax), (xmax, ymin, zmin), (xmin, ymin, zmin)]
+                face2 = [(xmin, ymax, zmin), (xmin, ymax, zmax), (xmax, ymax, zmax), (xmax, ymax, zmin), (xmin, ymax, zmin)]
+            else:
+                face1 = [(xmin, ymin, zmin), (xmin, ymax, zmin), (xmax, ymax, zmin), (xmax, ymin, zmin), (xmin, ymin, zmin)]
+                face2 = [(xmin, ymin, zmax), (xmin, ymax, zmax), (xmax, ymax, zmax), (xmax, ymin, zmax), (xmin, ymin, zmax)]    
+            verts.append(face1)
+            verts.append(face2)  
+        return np.asarray(verts)
+
+    
     
     def generate_random_free_point(self):
         """
