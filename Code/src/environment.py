@@ -9,15 +9,32 @@ class Environment3D:
     def __init__(self):
         self.boundary = []
         self.blocks = []
-        self.start_point = [7.954360487979886, 6.822833826909669, 1.058209137433761]
-        self.goal_point = [44.304797815557095, 29.328280798754054, 4.454834705539382]
+        self.start_point = [5, -4, 1]
+        self.goal_point = [5, 19, 3]
         self.safety_margin = 0.5  # Safety margin around obstacles
 
 
+    def set_start_goal_points(self, start=None, goal=None):
+        scaleX = (self.boundary[3] - self.boundary[0])
+        scaleY = (self.boundary[4] - self.boundary[1])
+        scaleZ = (self.boundary[5] - self.boundary[2])
+        try:
+            if(start is None):
+                #self.start_point = self.generate_random_free_point()
+                pass
+            else:
+                self.start_point = self.generate_random_free_point()
+            if(goal is None):
+                #self.goal_point = self.generate_random_free_point()
+                pass
+            else:
+                self.goal_point = goal
+            return True
+        except:
+            return False
 
-    ###############################################
-    ##### TODO - Implement map file parsing ####### 
-    ###############################################    
+
+      
     def parse_map_file(self, filename):
         """
         Parse the map file and extract boundary and blocks
@@ -63,10 +80,13 @@ class Environment3D:
             xmin, ymin, zmin, xmax, ymax, zmax = block_and_color[0]
             if (pointX >= xmin-self.safety_margin and pointX <= xmax+self.safety_margin):
                 #Within range of X
-                if(pointY >= ymin-self.safety_margin and pointX <= ymax+self.safety_margin):
+                #print("Within range of X")
+                if(pointY >= ymin-self.safety_margin and pointY <= ymax+self.safety_margin):
                     #Within rangeo f Y
+                    #print("Within range of Y")
                     if(pointZ >= zmin-self.safety_margin and pointZ <= zmax+self.safety_margin):
                         #Within range of Z
+                        #print("Within range of Z")
                         return False
         return True
 
@@ -88,20 +108,23 @@ class Environment3D:
     ##############################################
     #### TODO - Implement line - collision checking #####
     ##############################################
-    def is_line_collision_free(self, p1, p2, num_checks=20):
+    def is_line_collision_free(self, p1, p2, num_checks=100):
         """
         Check if a line segment between two points is collision-free
         Used for RRT* edge validation
         return True if free, False if in collision
         """
+        #print(f"First Point: {p1}, second point: {p2}")
         #First simply check two points.
         if(self.is_point_in_free_space(p1) == False or self.is_point_in_free_space(p2) == False):
+            #print("Returning False Here.")
             return False
         
         else:
             p1x, p1y, p1z = p1
             p2x, p2y, p2z = p2
             dist_vec = np.abs(np.subtract(p2, p1))
+            total_dist = np.linalg.norm(dist_vec)
             xDir = 1
             yDir = 1
             zDir = 1
@@ -113,18 +136,23 @@ class Environment3D:
                 zDir = -1
             #num checks per one meter, i.e. 20 checks is a point every 5 cm. 
             
-            num_cores = 5
+            num_cores = math.ceil(total_dist*10)
             x_core, y_core, z_core = np.divide(dist_vec, num_cores)
-            x_check, y_check, z_check = np.divide(dist_vec, num_checks)
+            x_check, y_check, z_check = np.divide([x_core, y_core, z_core], num_checks)
+            #print(f"Check Dist: {[x_check, y_check, z_check]}")
+            #print(f"Core Dist: {[x_core, y_core, z_core]}")
 
             checkingPoint = p1
+            allPoints = []
             for i in range(num_checks):
-                checkingPoint = np.add(checkingPoint, [checkingPoint[0]+(xDir*x_check*i), checkingPoint[1]+(yDir*y_check*i), checkingPoint[2]+(zDir*z_check*i)])
+                checkingPoint = np.add(checkingPoint, [(xDir*x_check), (yDir*y_check), (zDir*z_check)])
+                #print(f"Checking Point: {checkingPoint}")
                 for j in range(num_cores):
                     core_point = [checkingPoint[0]+(xDir*x_core*j), checkingPoint[1]+(yDir*y_core*j), checkingPoint[2]+(zDir*z_core*j)]
+                    allPoints.append(checkingPoint)
                     if(self.is_point_in_free_space(core_point) == False):
-                        return False
-            return True
+                        return core_point
+            return allPoints
                             
 
     def visualize_environment(self, ax=None, show_start_goal = False):
@@ -141,7 +169,6 @@ class Environment3D:
         for block_color in self.blocks:
             coords = block_color[0]
             color = np.divide(block_color[1], 255)
-            print(f"Color: {color}")
             if(len(verts) == 0):
                 verts = self.list_of_coords(coords)
             else:
@@ -151,6 +178,7 @@ class Environment3D:
         if (show_start_goal):
             ax.scatter(self.start_point[0], self.start_point[1], self.start_point[2], s=100, color= 'red', marker = '*')
             ax.scatter(self.goal_point[0], self.goal_point[1], self.goal_point[2], s=100, color= 'blue', marker = 'X')
+
         poly = Poly3DCollection(verts, alpha = .9)
         poly.set_facecolor(colors)
         poly.set_edgecolor('black')
@@ -166,13 +194,12 @@ class Environment3D:
             ax.set_ylim
             ax.legend()
             plt.tight_layout()
-            plt.show()
+            #plt.show()
 
         return ax
         
     def list_of_coords(self, coords):
         xmin, ymin, zmin, xmax, ymax, zmax = coords
-        print(f"Coords: {coords}")
         verts = []
         for ax in 'xyz':
             if(ax == 'x'):

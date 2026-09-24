@@ -74,18 +74,23 @@ def run_path_planning_demo(map_file, start=None, goal=None):
     fig = plt.figure(figsize=(15, 5))
     
     # Environment
+    '''
     ax1 = fig.add_subplot(131, projection='3d')
     env.visualize_environment(ax1)
     ax1.set_title('Environment')
+    '''
     
     # RRT* tree
-    ax2 = fig.add_subplot(132, projection='3d')
+    ax2 = fig.add_subplot(121, projection='3d')
     env.visualize_environment(ax2, show_start_goal=False)
     planner.visualize_tree(ax2)
     ax2.set_title('RRT* Tree')
+    ax2.set_xlim((env.boundary[0], env.boundary[3]))
+    ax2.set_ylim((env.boundary[1], env.boundary[4]))
+    ax2.set_zlim((env.boundary[2], env.boundary[5]))
     
     # Final path
-    ax3 = fig.add_subplot(133, projection='3d')
+    ax3 = fig.add_subplot(122, projection='3d')
     env.visualize_environment(ax3)
     if planner.waypoints:
         waypoints = np.array(planner.waypoints)
@@ -93,8 +98,10 @@ def run_path_planning_demo(map_file, start=None, goal=None):
                 'ro-', markersize=8, linewidth=3, label='Final Path')
         ax3.legend()
     ax3.set_title('Final Path')
-    
-    plt.tight_layout()
+    ax3.set_xlim((env.boundary[0], env.boundary[3]))
+    ax3.set_ylim((env.boundary[1], env.boundary[4]))
+    ax3.set_zlim((env.boundary[2], env.boundary[5]))
+    #plt.tight_layout()
     plt.show()
     
     print("Path planning demonstration completed!")
