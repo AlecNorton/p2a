@@ -83,8 +83,9 @@ class quad_control:
     def __init__(self):
 
         # TODO - SET CONTROLLER PROPERTIES AND GAINS 
-        dt = None 
-        filter_tau = None
+        # The simulator calls this controller at 50 Hz (simulator.py: dt = 0.02).
+        dt = 0.02
+        filter_tau = 0.08
         self.dt = dt
 
         # tello params
@@ -107,17 +108,17 @@ class quad_control:
         ########################### TODO - SET GAINS HERE ###########################
         # EDIT PID GAINS HERE! (kp, ki, kd, filter_tau, dt, dim = 1, minVal = -1, maxVal = 1)
         # NED position controller. EDIT GAINS HERE
-        self.x_pid = pid(0.0, 0.0, 0.0, filter_tau, dt, minVal = minVel, maxVal=maxVel)
-        self.y_pid = pid(0.0, 0.0, 0.0, filter_tau, dt, minVal = minVel, maxVal=maxVel)
-        self.z_pid = pid(0.0, 0.0, 0.0, filter_tau, dt, minVal = minVel, maxVal=maxVel)
+        self.x_pid = pid(0.8, 0.0, 0.0, filter_tau, dt, minVal = minVel, maxVal=maxVel)
+        self.y_pid = pid(0.8, 0.0, 0.0, filter_tau, dt, minVal = minVel, maxVal=maxVel)
+        self.z_pid = pid(1.0, 0.0, 0.0, filter_tau, dt, minVal = minVel, maxVal=maxVel)
 
 
         ########################## TODO - SET GAINS HERE ##############################
         ###############################################################################
         # NED velocity controller. EDIT GAINS HERE
-        self.vx_pid = pid(0, 0.0, 0.0, filter_tau, dt, minVal = minAcc, maxVal=maxAcc)
-        self.vy_pid = pid(0.0, 0.0, 0.0, filter_tau, dt, minVal = minAcc, maxVal=maxAcc)
-        self.vz_pid = pid(0, 0, 0, filter_tau, dt, minVal = minAcc, maxVal = maxAcc)
+        self.vx_pid = pid(1.8, 0.0, 0.08, filter_tau, dt, minVal = minAcc, maxVal=maxAcc)
+        self.vy_pid = pid(1.8, 0.0, 0.08, filter_tau, dt, minVal = minAcc, maxVal=maxAcc)
+        self.vz_pid = pid(2.0, 0.0, 0.08, filter_tau, dt, minVal = minAcc, maxVal = maxAcc)
         ##############################################################################
         ##############################################################################
 
@@ -184,7 +185,12 @@ class quad_control:
 
         quat_wo_yaw = Quaternion(axis=rotationAxis, radians=angle)
 
-        quat_yaw = Quaternion(axis=np.array((0., 0., 1)), radians=WP[3])
+        # The simulator initializes [qx,qy,qz,qw] = [0,0,0,1], while both
+        # this controller and quad_dynamics pass that array to pyquaternion
+        # as [w,x,y,z]. In this project that represents a 180-degree yaw.
+        # Preserve the simulator's convention so a zero-yaw command starts
+        # at the actual hover attitude instead of commanding a sudden spin.
+        quat_yaw = Quaternion(axis=np.array((0., 0., 1)), radians=WP[3] + np.pi)
 
         quat_sp = quat_wo_yaw * quat_yaw
 
