@@ -108,17 +108,17 @@ class quad_control:
         ########################### TODO - SET GAINS HERE ###########################
         # EDIT PID GAINS HERE! (kp, ki, kd, filter_tau, dt, dim = 1, minVal = -1, maxVal = 1)
         # NED position controller. EDIT GAINS HERE
-        self.x_pid = pid(0.8, 0.0, 0.0, filter_tau, dt, minVal = minVel, maxVal=maxVel)
-        self.y_pid = pid(0.8, 0.0, 0.0, filter_tau, dt, minVal = minVel, maxVal=maxVel)
-        self.z_pid = pid(1.0, 0.0, 0.0, filter_tau, dt, minVal = minVel, maxVal=maxVel)
+        self.x_pid = pid(1.2, 0.0, 0.1, filter_tau, dt, minVal = minVel, maxVal=maxVel)
+        self.y_pid = pid(1.2, 0.0, 0.1, filter_tau, dt, minVal = minVel, maxVal=maxVel)
+        self.z_pid = pid(1.2, 0.0, 0.1, filter_tau, dt, minVal = minVel, maxVal=maxVel)
 
 
         ########################## TODO - SET GAINS HERE ##############################
         ###############################################################################
         # NED velocity controller. EDIT GAINS HERE
-        self.vx_pid = pid(1.8, 0.0, 0.08, filter_tau, dt, minVal = minAcc, maxVal=maxAcc)
-        self.vy_pid = pid(1.8, 0.0, 0.08, filter_tau, dt, minVal = minAcc, maxVal=maxAcc)
-        self.vz_pid = pid(2.0, 0.0, 0.08, filter_tau, dt, minVal = minAcc, maxVal = maxAcc)
+        self.vx_pid = pid(1.8, 0.05, 0.1, filter_tau, dt, minVal = minAcc, maxVal=maxAcc)
+        self.vy_pid = pid(1.8, 0.05, 0.1, filter_tau, dt, minVal = minAcc, maxVal=maxAcc)
+        self.vz_pid = pid(3.0, 0.02, 0.08, filter_tau, dt, minVal = minAcc, maxVal = maxAcc)
         ##############################################################################
         ##############################################################################
 
