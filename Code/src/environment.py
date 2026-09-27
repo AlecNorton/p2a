@@ -9,7 +9,7 @@ class Environment3D:
     def __init__(self):
         self.boundary = []
         self.blocks = []
-        self.start_point = [5, -4, 1]
+        self.start_point = [5, 2, 1]
         self.goal_point = [5, 19, 3]
         self.safety_margin = 0.5  # Safety margin around obstacles
 
@@ -20,13 +20,12 @@ class Environment3D:
         scaleZ = (self.boundary[5] - self.boundary[2])
         try:
             if(start is None):
-                #self.start_point = self.generate_random_free_point()
-                pass
-            else:
                 self.start_point = self.generate_random_free_point()
+                #pass
+            else:
+                self.start_point = start
             if(goal is None):
-                #self.goal_point = self.generate_random_free_point()
-                pass
+                self.goal_point = self.generate_random_free_point()
             else:
                 self.goal_point = goal
             return True
@@ -194,7 +193,7 @@ class Environment3D:
             ax.set_ylim
             ax.legend()
             plt.tight_layout()
-            #plt.show()
+            plt.show()
 
         return ax
         

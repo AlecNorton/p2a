@@ -44,7 +44,7 @@ def run_environment_visualization(map_file):
         return False
     
     # Visualize environment
-    env.visualize_environment()
+    env.visualize_environment(show_start_goal=True)
     
     print("Environment visualization completed!")
     return True
