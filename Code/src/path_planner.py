@@ -24,8 +24,11 @@ class PathPlanner:
         self.max_iterations = 3000
         self.step_size = 1
         self.goal_radius = .5
-        self.search_radius = 2.5
-        self.goal_bias = 0.15  # 15% bias towards goal
+        self.search_radius = 10
+        self.goal_bias = 0.10  # 15% bias towards goal
+        self.goal_node = None
+        self.refinement_iterations = 1000
+        self.refinement_flag = True
 
     
     ############################################################################################################
@@ -70,11 +73,56 @@ class PathPlanner:
 
                 #WE HAVE FOUND OUR PATH AND BREAK
                 #print(f"New node parent: {new_node.parent}")
-                waypoints = self.get_waypoints(new_node)
+                ##waypoints = self.get_waypoints(new_node)
+                self.goal_bias = 0.0
                 #print(f"Waypoints: {waypoints}")
-                self.waypoints = list(waypoints)
-                return True
-        return False
+                #self.waypoints = list(waypoints)
+                self.goal_node = new_node
+                break
+        if(self.goal_node is None):
+            print(f"Found no node: {self.goal_node}, {k}")
+            return False
+        elif(self.refinement_flag):
+            #Perform refinement stage. 
+            for k in range(self.refinement_iterations):
+                #Generate a random point, ensuring they are NOT in an obstacle. 15% bias for goal
+                goal_or_random = random()
+                if(goal_or_random <= self.goal_bias):
+                    random_point = self.env.goal_point
+                else:
+                    random_point = self.env.generate_random_free_point()
+                #Determine closest node and generate a point in its step radius based on direction. 
+                random_node = RRTNode(random_point)
+                closest_node= self.find_closest_node(random_node)
+                direction = np.subtract(random_node.position, closest_node.position)
+                direction = direction/np.linalg.norm(direction)
+                new_point = np.add(closest_node.position, np.multiply(direction, self.step_size))
+                if(self.euclidian_dist(RRTNode(new_point), closest_node) > self.step_size):
+                    #print(f"dist: {self.euclidian_dist(RRTNode(new_point), closest_node)}")
+                    pass
+                #If new point causes line collision, simply continue and just sample a new point. 
+
+                if(self.env.is_line_collision_free(new_point, closest_node.position) == False):
+                    #print(f"Failed: {k}, new_point: {new_point}, closest_node: {closest_node.position}")
+                    continue
+                new_node = RRTNode(new_point)
+                self.parent_child(closest_node, new_node)
+                #Find appropriate parent. 
+                self.rewire(new_node)
+                self.tree_nodes.append(new_node)
+
+                #Just in case we get a closer point than our goal node. 
+                dist = np.linalg.norm(self.env.goal_point - new_node.position)
+                if(dist <= self.goal_radius and dist <= np.linalg.norm(self.env.goal_point - self.goal_node.position)):
+                    self.goal_node = new_node
+            
+            self.waypoints = list(self.get_waypoints(self.goal_node))
+            print(f"Cost of refined path: {self.goal_node.cost}")
+            return True
+        else:
+            self.waypoints = list(self.get_waypoints(self.goal_node))
+            print(f"Cost of unrefined path: {self.goal_node.cost}")
+            return True
 
     def find_closest_node(self, new_node):
         smallest_dist = -1

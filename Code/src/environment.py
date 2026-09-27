@@ -9,7 +9,7 @@ class Environment3D:
     def __init__(self):
         self.boundary = []
         self.blocks = []
-        self.start_point = [5, 2, 1]
+        self.start_point = [5, -4.5, 1]
         self.goal_point = [5, 19, 3]
         self.safety_margin = 0.5  # Safety margin around obstacles
 
@@ -20,12 +20,13 @@ class Environment3D:
         scaleZ = (self.boundary[5] - self.boundary[2])
         try:
             if(start is None):
-                self.start_point = self.generate_random_free_point()
-                #pass
+                #self.start_point = self.generate_random_free_point()
+                pass
             else:
                 self.start_point = start
             if(goal is None):
-                self.goal_point = self.generate_random_free_point()
+                #self.goal_point = self.generate_random_free_point()
+                pass
             else:
                 self.goal_point = goal
             return True
@@ -135,9 +136,7 @@ class Environment3D:
                 zDir = -1
             #num checks per one meter, i.e. 20 checks is a point every 5 cm. 
             
-            num_cores = math.ceil(total_dist*10)
-            x_core, y_core, z_core = np.divide(dist_vec, num_cores)
-            x_check, y_check, z_check = np.divide([x_core, y_core, z_core], num_checks)
+            x_check, y_check, z_check = np.divide(dist_vec, num_checks)
             #print(f"Check Dist: {[x_check, y_check, z_check]}")
             #print(f"Core Dist: {[x_core, y_core, z_core]}")
 
@@ -146,11 +145,9 @@ class Environment3D:
             for i in range(num_checks):
                 checkingPoint = np.add(checkingPoint, [(xDir*x_check), (yDir*y_check), (zDir*z_check)])
                 #print(f"Checking Point: {checkingPoint}")
-                for j in range(num_cores):
-                    core_point = [checkingPoint[0]+(xDir*x_core*j), checkingPoint[1]+(yDir*y_core*j), checkingPoint[2]+(zDir*z_core*j)]
-                    allPoints.append(checkingPoint)
-                    if(self.is_point_in_free_space(core_point) == False):
-                        return core_point
+                allPoints.append(checkingPoint)
+                if(self.is_point_in_free_space(checkingPoint) == False):
+                    return False
             return allPoints
                             
 
