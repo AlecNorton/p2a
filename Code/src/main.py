@@ -133,8 +133,8 @@ def run_trajectory_demo(map_file, start=None, goal=None):
     if result[0] is not None:
         trajectory_points, time_points, velocities, accelerations = result
         
-        # Visualize trajectory
-        traj_gen.visualize_trajectory(trajectory_points, velocities, accelerations, ax)
+        #Visualize trajectory
+        traj_gen.visualize_trajectory(trajectory_points, velocities, accelerations)
         
         print("Trajectory generation demonstration completed!")
         return True
