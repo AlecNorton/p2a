@@ -118,20 +118,23 @@ def run_trajectory_demo(map_file, start=None, goal=None):
     
     if not env.set_start_goal_points(start, goal):
         return False
+
+    ax = env.visualize_environment()
     
     planner = PathPlanner(env)
     if not planner.plan_path():
         return False
     
     # Generate trajectory
+    print(f"Waypoints: {planner.waypoints}")
     traj_gen = TrajectoryGenerator(planner.waypoints)
-    result = traj_gen.generate_bspline_trajectory(num_points=200)
+    result = traj_gen.generate_spline_trajectory(num_points=200)
     
     if result[0] is not None:
         trajectory_points, time_points, velocities, accelerations = result
         
         # Visualize trajectory
-        traj_gen.visualize_trajectory(trajectory_points, velocities, accelerations)
+        traj_gen.visualize_trajectory(trajectory_points, velocities, accelerations, ax)
         
         print("Trajectory generation demonstration completed!")
         return True

@@ -117,10 +117,12 @@ class PathPlanner:
                     self.goal_node = new_node
             
             self.waypoints = list(self.get_waypoints(self.goal_node))
+            self.waypoints = self.waypoints[::-1]
             print(f"Cost of refined path: {self.goal_node.cost}")
             return True
         else:
             self.waypoints = list(self.get_waypoints(self.goal_node))
+            self.waypoints = self.waypoints[::-1]
             print(f"Cost of unrefined path: {self.goal_node.cost}")
             return True
 

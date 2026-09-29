@@ -190,7 +190,7 @@ class Environment3D:
             ax.set_ylim
             ax.legend()
             plt.tight_layout()
-            plt.show()
+            #plt.show()
 
         return ax
         

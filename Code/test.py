@@ -4,7 +4,27 @@ import matplotlib.pyplot as plt
 import numpy as np
 a = Environment3D()
 import pathlib
+from scipy.optimize import fsolve, minimize_scalar, fmin_l_bfgs_b
 
+
+
+
+def get_pos(a, t = None):
+        a0, a1, a2, a3, a4, a5 = a
+        return a0+a1*t + a2*t**2 + a3*t**3 + a4*t**4 + a5*t**5
+def get_accel(a, t = None):
+        a0, a1, a2, a3, a4, a5 = a
+        return a0+a1*t + a2*t**2 + a3*t**3 + a4*t**4 + a5*t**5        
+
+
+a = [1, 1, 1, 1, 1, 1]
+max_x = fmin_l_bfgs_b(lambda x: -get_pos(a, x), 0, bounds = [(0, 5)], approx_grad = True)
+print(-max_x[1])
+
+max = fmin_l_bfgs_b(lambda t: -get_accel(a, t), 0, bounds = [(0, 5)], approx_grad = True)
+print(f"MAX: {-max[1]}")
+
+'''
 
 if(a.parse_map_file('Code/src/maps/map1.txt')):
     pass
@@ -12,7 +32,6 @@ else:
     print("Ahhhh wrong file name")
 
  #Test collision function
-'''
 for i in range(0, 10):
     plt.cla()
     ax = a.visualize_environment()
