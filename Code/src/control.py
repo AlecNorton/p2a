@@ -3,6 +3,7 @@ import math
 from pyquaternion import Quaternion
 from numpy.linalg import norm
 import scipy
+import os
 
 class pid:
     def __init__(self, kp, ki, kd, filter_tau, dt, dim = 1, minVal = -1, maxVal = 1):
@@ -108,16 +109,18 @@ class quad_control:
         ########################### TODO - SET GAINS HERE ###########################
         # EDIT PID GAINS HERE! (kp, ki, kd, filter_tau, dt, dim = 1, minVal = -1, maxVal = 1)
         # NED position controller. EDIT GAINS HERE
-        self.x_pid = pid(1.2, 0.0, 0.1, filter_tau, dt, minVal = minVel, maxVal=maxVel)
-        self.y_pid = pid(1.2, 0.0, 0.1, filter_tau, dt, minVal = minVel, maxVal=maxVel)
-        self.z_pid = pid(1.2, 0.0, 0.1, filter_tau, dt, minVal = minVel, maxVal=maxVel)
+        # Tuned on team-generated Map 1 and Map 4 references. Group3_p2a
+        # was reviewed for comparison; these gains were selected by direct testing.
+        self.x_pid = pid(0.8, 0.0, 0.05, filter_tau, dt, minVal = minVel, maxVal=maxVel)
+        self.y_pid = pid(0.8, 0.0, 0.05, filter_tau, dt, minVal = minVel, maxVal=maxVel)
+        self.z_pid = pid(0.8, 0.0, 0.05, filter_tau, dt, minVal = minVel, maxVal=maxVel)
 
 
         ########################## TODO - SET GAINS HERE ##############################
         ###############################################################################
         # NED velocity controller. EDIT GAINS HERE
-        self.vx_pid = pid(1.8, 0.05, 0.1, filter_tau, dt, minVal = minAcc, maxVal=maxAcc)
-        self.vy_pid = pid(1.8, 0.05, 0.1, filter_tau, dt, minVal = minAcc, maxVal=maxAcc)
+        self.vx_pid = pid(1.4, 0.05, 0.05, filter_tau, dt, minVal = minAcc, maxVal=maxAcc)
+        self.vy_pid = pid(1.4, 0.05, 0.05, filter_tau, dt, minVal = minAcc, maxVal=maxAcc)
         self.vz_pid = pid(3.0, 0.02, 0.08, filter_tau, dt, minVal = minAcc, maxVal = maxAcc)
         ##############################################################################
         ##############################################################################
@@ -133,6 +136,7 @@ class quad_control:
         self.r_pid = pid(kp_angvel, 0, kp_angvel/15, filter_tau, dt, minVal = minAct, maxVal = maxAct)
 
         # For logging
+        os.makedirs("./log", exist_ok=True)
         self.current_time = 0.
         self.timeArray = 0
         self.controlArray = np.array([0., 0, 0, 0])
@@ -173,17 +177,20 @@ class quad_control:
         # mass specific force to be applied by the actuation system
         f_inertial = np.array((acc_x_sp, acc_y_sp, acc_z_sp)) - np.array((0., 0., 9.81))
 
-        rotationAxis = np.cross(np.array((0., 0., -1.)), f_inertial/norm(f_inertial))
-        rotationAxis += np.array((1e-3, 1e-3, 1e-3)) # Avoid numerical issue
-
+        force_norm = norm(f_inertial)
+        if not np.isfinite(force_norm) or force_norm < 1e-8:
+            raise ValueError("Invalid or near-zero requested thrust vector")
+        reference_axis = np.array((0., 0., -1.))
+        direction = f_inertial / force_norm
+        rotationAxis = np.cross(reference_axis, direction)
         sinAngle = norm(rotationAxis)
-        rotationAxis = rotationAxis / norm(rotationAxis)
-
-        cosAngle = np.dot( np.array((0., 0., -1.)), f_inertial/norm(f_inertial) )
-
-        angle = math.atan2(sinAngle, cosAngle)
-
-        quat_wo_yaw = Quaternion(axis=rotationAxis, radians=angle)
+        cosAngle = float(np.clip(np.dot(reference_axis, direction), -1., 1.))
+        if sinAngle < 1e-10:
+            # An arbitrary perturbation biases hover. Handle collinearity exactly.
+            quat_wo_yaw = Quaternion() if cosAngle >= 0 else Quaternion(axis=[1,0,0], radians=np.pi)
+        else:
+            quat_wo_yaw = Quaternion(axis=rotationAxis/sinAngle,
+                                     radians=math.atan2(sinAngle,cosAngle))
 
         # The simulator initializes [qx,qy,qz,qw] = [0,0,0,1], while both
         # this controller and quad_dynamics pass that array to pyquaternion
@@ -235,7 +242,9 @@ class quad_control:
         loggedDict = {'control_time': self.timeArray,
                   'control_premix': self.controlArray}
         
-        scipy.io.savemat('./log/control.mat', loggedDict)
+        # Avoid rewriting a growing MAT file at every 50 Hz controller step.
+        if int(round(self.current_time / self.dt)) % 50 == 0:
+            scipy.io.savemat('./log/control.mat', loggedDict)
 
         return U
 
@@ -260,12 +269,21 @@ class QuadrotorController:
         
     def set_trajectory(self, trajectory_points, time_points, velocities, accelerations):
         """Set the reference trajectory"""
-        self.trajectory_points = trajectory_points
-        self.time_points = time_points
-        self.trajectory_velocities = velocities
-        self.trajectory_accelerations = accelerations
+        points = np.asarray(trajectory_points,dtype=float)
+        times = np.asarray(time_points,dtype=float)
+        vel = np.asarray(velocities,dtype=float)
+        acc = np.asarray(accelerations,dtype=float)
+        if points.ndim != 2 or points.shape[1] != 3 or len(points) < 2:
+            raise ValueError("Trajectory points must have shape (N>=2,3)")
+        if times.shape != (len(points),) or vel.shape != points.shape or acc.shape != points.shape:
+            raise ValueError("Position, velocity, acceleration and time arrays must agree")
+        if not all(np.isfinite(a).all() for a in (points,times,vel,acc)) or not np.all(np.diff(times)>0):
+            raise ValueError("Trajectory requires finite values and strictly increasing times")
+        self.trajectory_points, self.time_points = points.copy(),times.copy()
+        self.trajectory_velocities, self.trajectory_accelerations = vel.copy(),acc.copy()
+        self.controller = quad_control()  # Reset all PID history for the new flight.
+        self.reset_metrics()
 
-    
     def get_desired_state(self, t):
         """Get desired position, velocity, and acceleration at time t"""
         if (self.trajectory_points is None or len(self.trajectory_points) == 0 or 
@@ -313,10 +331,8 @@ class QuadrotorController:
         try:
             control_input = self.controller.step(current_state, waypoint, vel_des, acc_des)
         except Exception as e:
-            print(f"Controller error: {e}")
-            # Emergency hover
-            hover_thrust = self.params.mass * 9.81 / 4.0 / self.params.linearThrustToU
-            control_input = np.array([hover_thrust] * 4)
+            # Constant hover throttle cannot safely recover an arbitrary attitude.
+            raise RuntimeError(f"Controller failed at t={t:.3f}s: {e}") from e
         
         # Track performance
         current_pos = current_state[0:3]
