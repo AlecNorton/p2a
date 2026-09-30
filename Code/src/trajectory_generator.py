@@ -34,7 +34,7 @@ splines
         self.max_velocity = 5  # m/s #Assume this means in total. 
         self.max_acceleration = 1  # m/s^2
         self.avg_velocity = 3
-        self.path_length_multiplier = (1/self.max_velocity)+math.sqrt(1/self.max_acceleration)+1
+        self.path_length_multiplier = 5
         self.time_points = None
 
 

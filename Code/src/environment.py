@@ -20,13 +20,13 @@ class Environment3D:
         scaleZ = (self.boundary[5] - self.boundary[2])
         try:
             if(start is None):
-                self.start_point = self.generate_random_free_point()
-                #pass
+                #self.start_point = self.generate_random_free_point()
+                pass
             else:
                 self.start_point = start
             if(goal is None):
-                self.goal_point = self.generate_random_free_point()
-                #pass
+                #self.goal_point = self.generate_random_free_point()
+                pass
             else:
                 self.goal_point = goal
             return True
