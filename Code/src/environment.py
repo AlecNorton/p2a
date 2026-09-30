@@ -9,7 +9,7 @@ class Environment3D:
     def __init__(self):
         self.boundary = []
         self.blocks = []
-        self.start_point = [5, -4, 1]
+        self.start_point = [5, -4.5, 1]
         self.goal_point = [5, 19, 3]
         self.safety_margin = 0.5  # Safety margin around obstacles
 
@@ -23,7 +23,7 @@ class Environment3D:
                 #self.start_point = self.generate_random_free_point()
                 pass
             else:
-                self.start_point = self.generate_random_free_point()
+                self.start_point = start
             if(goal is None):
                 #self.goal_point = self.generate_random_free_point()
                 pass
@@ -72,35 +72,33 @@ class Environment3D:
         Complete implementation with collision checking
         return True if free, False if in collision
         """
-        #Check x range, y range, and z range using nested if statements.
-        pointX, pointY, pointZ = point
-        if(self.is_point_in_boundary(point) == False):
+        #Accept a single point (3,) or a batch of points (N, 3).
+        pts = np.atleast_2d(np.asarray(point, dtype=float))
+        if(self.is_point_in_boundary(pts) == False):
             return False
+        px, py, pz = pts[:, 0], pts[:, 1], pts[:, 2]
+        m = self.safety_margin
         for block_and_color in self.blocks:
             xmin, ymin, zmin, xmax, ymax, zmax = block_and_color[0]
-            if (pointX >= xmin-self.safety_margin and pointX <= xmax+self.safety_margin):
-                #Within range of X
-                #print("Within range of X")
-                if(pointY >= ymin-self.safety_margin and pointY <= ymax+self.safety_margin):
-                    #Within rangeo f Y
-                    #print("Within range of Y")
-                    if(pointZ >= zmin-self.safety_margin and pointZ <= zmax+self.safety_margin):
-                        #Within range of Z
-                        #print("Within range of Z")
-                        return False
+            in_block = ((px >= xmin - m) & (px <= xmax + m) &
+                        (py >= ymin - m) & (py <= ymax + m) &
+                        (pz >= zmin - m) & (pz <= zmax + m))
+            if in_block.any():
+                return False
         return True
 
     def is_point_in_boundary(self, point):
         """
         True if point is within boundary plus some safety_margin.
         False if point is beyond bondary. """
-        pointX, pointY, pointZ = point
+        pts = np.atleast_2d(np.asarray(point, dtype=float))
+        px, py, pz = pts[:, 0], pts[:, 1], pts[:, 2]
+        m = self.safety_margin
         xmin, ymin, zmin, xmax, ymax, zmax = self.boundary
-        if(pointX >= xmin+self.safety_margin and pointX <=xmax-self.safety_margin):
-            if(pointY >= ymin+self.safety_margin and pointY <=ymax-self.safety_margin):
-                if(pointZ >= zmin+self.safety_margin and pointZ <=zmax-self.safety_margin):
-                    return True
-        return False
+        inside = ((px >= xmin + m) & (px <= xmax - m) &
+                  (py >= ymin + m) & (py <= ymax - m) &
+                  (pz >= zmin + m) & (pz <= zmax - m))
+        return bool(inside.all())
             
     
 
@@ -136,23 +134,14 @@ class Environment3D:
                 zDir = -1
             #num checks per one meter, i.e. 20 checks is a point every 5 cm. 
             
-            num_cores = math.ceil(total_dist*10)
-            x_core, y_core, z_core = np.divide(dist_vec, num_cores)
-            x_check, y_check, z_check = np.divide([x_core, y_core, z_core], num_checks)
+            x_check, y_check, z_check = np.divide(dist_vec, num_checks)
             #print(f"Check Dist: {[x_check, y_check, z_check]}")
             #print(f"Core Dist: {[x_core, y_core, z_core]}")
 
-            checkingPoint = p1
-            allPoints = []
-            for i in range(num_checks):
-                checkingPoint = np.add(checkingPoint, [(xDir*x_check), (yDir*y_check), (zDir*z_check)])
-                #print(f"Checking Point: {checkingPoint}")
-                for j in range(num_cores):
-                    core_point = [checkingPoint[0]+(xDir*x_core*j), checkingPoint[1]+(yDir*y_core*j), checkingPoint[2]+(zDir*z_core*j)]
-                    allPoints.append(checkingPoint)
-                    if(self.is_point_in_free_space(core_point) == False):
-                        return core_point
-            return allPoints
+            step = np.array([xDir*x_check, yDir*y_check, zDir*z_check])
+            steps = np.arange(1, num_checks + 1).reshape(-1, 1)
+            allPoints = np.array(p1) + steps * step
+            return bool(self.is_point_in_free_space(allPoints))
                             
 
     def visualize_environment(self, ax=None, show_start_goal = False):
@@ -194,7 +183,7 @@ class Environment3D:
             ax.set_ylim
             ax.legend()
             plt.tight_layout()
-            #plt.show()
+            plt.show()
 
         return ax
         
