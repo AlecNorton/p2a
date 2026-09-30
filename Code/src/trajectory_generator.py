@@ -72,8 +72,9 @@ splines
         return trajectory_points, time_points, velocities, accelerations
 
     def visualize_trajectory(self, trajectory_points=None, velocities=None,
-                           accelerations=None, ax=None):
-        """Visualize the trajectory with velocity and acceleration vectors"""
+                           accelerations=None, ax=None, env=None):
+        """Visualize the trajectory with velocity and acceleration vectors.
+        Pass env to also draw the obstacles / boundary / start-goal."""
         if ax is None:
             fig = plt.figure(figsize=(15, 5))
             ax1 = fig.add_subplot(131, projection='3d')
@@ -85,6 +86,14 @@ splines
             standalone = False
 
         if trajectory_points is not None:
+            # Draw the environment (obstacles + start/goal) underneath the path
+            if env is not None:
+                env.visualize_environment(ax1, show_start_goal=True)
+                if env.boundary:
+                    ax1.set_xlim(env.boundary[0], env.boundary[3])
+                    ax1.set_ylim(env.boundary[1], env.boundary[4])
+                    ax1.set_zlim(env.boundary[2], env.boundary[5])
+
             # Plot 3D trajectory
             ax1.plot(trajectory_points[:, 0], trajectory_points[:, 1],
                     trajectory_points[:, 2], 'b-', linewidth=2, label='Spline Trajectory')

@@ -159,7 +159,7 @@ class Environment3D:
             ax.scatter(self.start_point[0], self.start_point[1], self.start_point[2], s=100, color= 'red', marker = '*')
             ax.scatter(self.goal_point[0], self.goal_point[1], self.goal_point[2], s=100, color= 'blue', marker = 'X')
 
-        poly = Poly3DCollection(verts, alpha = .9)
+        poly = Poly3DCollection(verts, alpha = .3)
         poly.set_facecolor(colors)
         poly.set_edgecolor('black')
         ax.add_collection(poly)
