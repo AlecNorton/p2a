@@ -44,98 +44,83 @@ class PathPlanner:
     #### TODO - Add member functions as needed #################################################################
     ############################################################################################################
 
-    def plan_path(self):
-        self.env.visualize_environment(show_start_goal = True)
-        print(f"Planning path between start: {self.env.start_point}, and goal: {self.env.goal_point}")
-        self.tree_nodes = []
-        self.tree_nodes.append(RRTNode(self.env.start_point))
-        for k in range(self.max_iterations):
-            #Generate a random point, ensuring they are NOT in an obstacle. 15% bias for goal
-            goal_or_random = random()
-            if(goal_or_random <= self.goal_bias):
-                random_point = self.env.goal_point
-            else:
-                random_point = self.env.generate_random_free_point()
-            #Determine closest node and generate a point in its step radius based on direction. 
-            random_node = RRTNode(random_point)
-            closest_node= self.find_closest_node(random_node)
-            direction = np.subtract(random_node.position, closest_node.position)
-            direction = direction/np.linalg.norm(direction)
-            new_point = np.add(closest_node.position, np.multiply(direction, self.step_size))
-            if(self.euclidian_dist(RRTNode(new_point), closest_node) > self.step_size):
-                #print(f"dist: {self.euclidian_dist(RRTNode(new_point), closest_node)}")
-                pass
-            #If new point causes line collision, simply continue and just sample a new point. 
+    def plan_path(self, on_expand=None):
+        """Search then refine; store one start-to-exact-goal path for all modes.
 
-            if(self.env.is_line_collision_free(new_point, closest_node.position) == False):
-                #print(f"Failed: {k}, new_point: {new_point}, closest_node: {closest_node.position}")
-                continue
-            new_node = RRTNode(new_point)
-            self.parent_child(closest_node, new_node)
-            #Find appropriate parent. 
-            self.rewire(new_node)
-            self.tree_nodes.append(new_node)
-            #print(f"Distance: {np.linalg.norm(self.env.goal_point - new_node.position)}")
-            if(np.linalg.norm(self.env.goal_point - new_node.position) <= self.goal_radius):
-
-                #WE HAVE FOUND OUR PATH AND BREAK
-                #print(f"New node parent: {new_node.parent}")
-                ##waypoints = self.get_waypoints(new_node)
-                self.goal_bias = 0.0
-                #print(f"Waypoints: {waypoints}")
-                #self.waypoints = list(waypoints)
-                self.goal_node = new_node
+        Reviewed against Group3_p2a's planner interface; fixes are original.
+        """
+        start, goal = np.array(self.env.start_point), np.array(self.env.goal_point)
+        if not self.env.is_point_in_free_space(start) or not self.env.is_point_in_free_space(goal):
+            raise ValueError("Start and goal must be in free space with the safety margin")
+        self.waypoints = []
+        self.goal_node = None
+        root = RRTNode(start)
+        self.tree_nodes = [root]
+        if np.linalg.norm(goal-start) < 1e-9:
+            self.waypoints = [start.tolist(), goal.tolist()]
+            self.goal_node = root
+            return True
+        first_solution = None
+        total = self.max_iterations + (self.refinement_iterations if self.refinement_flag else 0)
+        for k in range(total):
+            if first_solution is None and k >= self.max_iterations:
                 break
-        if(self.goal_node is None):
-            print(f"Found no node: {self.goal_node}, {k}")
+            if first_solution is not None and k-first_solution > self.refinement_iterations:
+                break
+            draw = random()
+            if draw < self.goal_bias:
+                sample = goal
+            elif draw < self.goal_bias + 0.15:
+                # Vertical exploration helps escape narrow starting columns and
+                # alternating high/low barriers, while uniform sampling remains.
+                sample = self.tree_nodes[np.random.randint(len(self.tree_nodes))].position.copy()
+                sample[2] = np.random.uniform(self.env.boundary[2]+self.env.safety_margin,
+                                              self.env.boundary[5]-self.env.safety_margin)
+            else:
+                sample = self.env.generate_random_free_point()
+            if sample is None:
+                continue
+            nearest = self.find_closest_node(RRTNode(sample))
+            pos = self.steer(nearest.position, sample)
+            if np.linalg.norm(pos-nearest.position) < 1e-8 or not self.is_path_valid(nearest.position,pos):
+                continue
+            near = self.find_near_nodes(RRTNode(pos))
+            parent, cost = self.choose_parent(near,pos)
+            if parent is None:
+                parent, cost = nearest, nearest.cost + np.linalg.norm(pos-nearest.position)
+            node = RRTNode(pos)
+            self.parent_child(parent,node)
+            self.tree_nodes.append(node)
+            self.rewire(node)
+            if np.linalg.norm(pos-goal) <= self.goal_radius and self.is_path_valid(pos,goal):
+                candidate_cost = node.cost + np.linalg.norm(pos-goal)
+                if self.goal_node is None:
+                    self.goal_node = RRTNode(goal)
+                    self.parent_child(node,self.goal_node)
+                    # Keep the terminal node outside sampling/rewiring to avoid duplicate goals.
+                    first_solution = k
+                elif candidate_cost < self.goal_node.cost - 1e-9:
+                    self.parent_child(node,self.goal_node)
+                if not self.refinement_flag:
+                    break
+            if on_expand is not None and k % 50 == 0:
+                on_expand(self.tree_nodes,k,total)
+        if self.goal_node is None:
             return False
-        elif(self.refinement_flag):
-            #Perform refinement stage. 
-            for k in range(self.refinement_iterations):
-                #Generate a random point, ensuring they are NOT in an obstacle. 15% bias for goal
-                goal_or_random = random()
-                if(goal_or_random <= self.goal_bias):
-                    random_point = self.env.goal_point
-                else:
-                    random_point = self.env.generate_random_free_point()
-                #Determine closest node and generate a point in its step radius based on direction. 
-                random_node = RRTNode(random_point)
-                closest_node= self.find_closest_node(random_node)
-                new_point = self.steer(random_point, closest_node.position)
-                if(self.euclidian_dist(RRTNode(new_point), closest_node) > self.step_size):
-                    #print(f"dist: {self.euclidian_dist(RRTNode(new_point), closest_node)}")
-                    pass
-                #If new point causes line collision, simply continue and just sample a new point. 
-
-                if(self.env.is_line_collision_free(new_point, closest_node.position) == False):
-                    #print(f"Failed: {k}, new_point: {new_point}, closest_node: {closest_node.position}")
-                    continue
-                new_node = RRTNode(new_point)
-                self.parent_child(closest_node, new_node)
-                #Find appropriate parent. 
-                self.rewire(new_node)
-                self.tree_nodes.append(new_node)
-
-                #Just in case we get a closer point than our goal node. 
-                dist = np.linalg.norm(self.env.goal_point - new_node.position)
-                if(dist <= self.goal_radius and dist <= np.linalg.norm(self.env.goal_point - self.goal_node.position)):
-                    self.goal_node = new_node
-            
-            self.waypoints = list(self.get_waypoints(self.goal_node))
-            print(f"Cost of refined path: {self.goal_node.cost}")
-            return True
-        else:
-            self.waypoints = list(self.get_waypoints(self.goal_node))
-            print(f"Cost of unrefined path: {self.goal_node.cost}")
-            return True
-
+        self.waypoints = self.simplify_path(self.extract_path(self.goal_node))
+        if on_expand is not None:
+            on_expand(self.tree_nodes,k,total)
+        print(f"Planned {len(self.waypoints)} waypoints, cost {self.goal_node.cost:.3f} m")
+        return True
 
     def steer(self, neighbor_point, sample_point):
-        direction = np.subtract(sample_point, neighbor_point)
-        direction = direction/np.linalg.norm(direction)
-        new_point = np.add(neighbor_point, np.multiply(direction, self.step_size))
-        return new_point
-    
+        origin = np.asarray(neighbor_point,dtype=float)
+        direction = np.asarray(sample_point,dtype=float)-origin
+        length = np.linalg.norm(direction)
+        if length < 1e-12:
+            return origin.copy()
+        return origin + direction * min(self.step_size,length)/length
+
     def find_closest_node(self, new_node, tree=None):
         smallest_dist = -1
         closestNode = None
@@ -184,30 +169,36 @@ class PathPlanner:
         return self.env.is_line_collision_free(pos1, pos2)
 
     def choose_parent(self, neighboring_nodes, new_pos):
-        best_parent = None
-        best_cost = math.inf
+        best_parent, best_cost = None, math.inf
         for neighbor in neighboring_nodes:
-            new_cost = neighbor.cost + self.euclidian_dist(neighbor, RRTNode(new_pos))
-            if(new_cost < best_cost):
-                best_parent = neighbor
-                best_cost = neighbor.cost + self.euclidian_dist(new_cost)
-        return best_parent, best_cost
-    
-
+            cost = neighbor.cost + np.linalg.norm(neighbor.position-new_pos)
+            if cost < best_cost and self.is_path_valid(neighbor.position,new_pos):
+                best_parent, best_cost = neighbor, cost
+        return best_parent,best_cost
 
     def get_waypoints(self, end_node):
+        points, seen = [], set()
+        while end_node is not None:
+            if id(end_node) in seen:
+                raise RuntimeError("Cycle in planner parent links")
+            seen.add(id(end_node)); points.append(end_node.position)
+            end_node = end_node.parent
+        return np.asarray(points)
 
-        
-        #print(f"End Node: {end_node}")
-        appending = [end_node]
-        if(end_node.parent is None):
-            #print("Node has no parent.")
-            return np.array([end_node.position])
-        else:
-            return np.vstack([np.array([end_node.position]), self.get_waypoints(end_node.parent)])
+    def simplify_path(self, points):
+        """Retain only necessary intermediate waypoints using valid shortcuts."""
+        if len(points) < 3:
+            return points
+        result, i = [points[0]], 0
+        while i < len(points)-1:
+            j = len(points)-1
+            while j > i+1 and not self.is_path_valid(points[i],points[j]):
+                j -= 1
+            result.append(points[j]); i = j
+        return result
 
     def extract_path(self, goal_node):
-        return list(self.get_waypoints(goal_node)).reverse()
+        return [point.tolist() for point in self.get_waypoints(goal_node)[::-1]]
 
     
     def euclidian_dist(self, node1: RRTNode, node2:RRTNode):
@@ -218,19 +209,23 @@ class PathPlanner:
         return np.linalg.norm(pos1 -pos2)
 
     def parent_child(self, parentNode, childNode):
-        if(childNode.parent is None):
-            childNode.parent = parentNode
-            childNode.cost = parentNode.cost + self.euclidian_dist(parentNode, childNode)
-            parentNode.children.append(childNode)
-        else:
+        ancestor = parentNode
+        while ancestor is not None:
+            if ancestor is childNode:
+                raise ValueError("Reparenting would introduce a cycle")
+            ancestor = ancestor.parent
+        if childNode.parent is not None:
             childNode.parent.children.remove(childNode)
-            childNode.parent = parentNode
-            childNode.cost = parentNode.cost + self.euclidian_dist(parentNode, childNode)
-            parentNode.children.append(childNode)
+        childNode.parent = parentNode
+        childNode.cost = parentNode.cost + self.euclidian_dist(parentNode,childNode)
+        parentNode.children.append(childNode)
+        stack = [childNode]
+        while stack:
+            node = stack.pop()
+            for child in node.children:
+                child.cost = node.cost + self.euclidian_dist(node,child)
+                stack.append(child)
 
-
-
-    
     def visualize_tree(self, ax=None):
         """Visualize the RRT* tree"""
         if ax is None:
