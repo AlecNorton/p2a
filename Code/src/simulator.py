@@ -129,6 +129,8 @@ class LiveQuadrotorSimulator:
         goal_radius = max(0.8, min(1.5, distance / 15))  # Adaptive goal radius
         search_radius = step_size * 2.5
         goal_bias = 0.15
+
+        self.planner.set_vars(max_iterations, step_size, goal_radius, search_radius, goal_bias)
         
         print(f"🔧 RRT* Parameters:")
         print(f"   Max iterations: {max_iterations}")
@@ -152,28 +154,32 @@ class LiveQuadrotorSimulator:
                 sample_point = np.array(sample)
             
             # Find nearest node
-            nearest_node = self.planner.find_nearest_node(tree, sample_point)
+            nearest_node = self.planner.find_closest_node(RRTNode(sample_point), tree)
             if nearest_node is None:
+                print("No nearest node.")
                 continue
             
             # Steer towards sample
-            new_position = self.planner.steer(nearest_node.position, sample_point, step_size)
+            new_position = self.planner.steer(nearest_node.position, sample_point)
             
             # Check validity
             if not self.env.is_point_in_free_space(new_position):
+                print("Colliding point.")
                 continue
             if not self.env.is_line_collision_free(nearest_node.position, new_position):
+                print("Colliding path")
                 continue
             
             # Find near nodes and choose best parent
-            near_nodes = self.planner.find_near_nodes(tree, new_position, search_radius)
+            near_nodes = self.planner.find_near_nodes(new_position)
             best_parent, best_cost = self.planner.choose_parent(near_nodes, new_position)
             
             if best_parent is None:
                 if self.planner.is_path_valid(nearest_node.position, new_position):
                     best_parent = nearest_node
-                    best_cost = nearest_node.cost + self.planner.distance(nearest_node.position, new_position)
+                    best_cost = nearest_node.cost + self.planner.euclidian_dist(RRTNode(nearest_node.position), RRTNode(new_position))
                 else:
+                    print("path not valid")
                     continue
             
             # Create new node
@@ -184,11 +190,12 @@ class LiveQuadrotorSimulator:
             tree.append(new_node)
             
             # Rewire tree
-            self.planner.rewire_tree(tree, new_node, near_nodes)
+            self.planner.rewire(new_node)
             
             # Check if goal reached
-            goal_distance = self.planner.distance(new_position, goal_point)
+            goal_distance = self.planner.euclidian_dist(RRTNode(new_position), RRTNode(goal_point))
             if goal_distance <= goal_radius:
+                print("Occurring???")
                 if self.planner.is_path_valid(new_position, goal_point):
                     goal_node = RRTNode(goal_point)
                     goal_node.parent = new_node
@@ -514,8 +521,9 @@ class LiveQuadrotorSimulator:
     # Keep all the other methods from before (environment drawing, results, etc.)
     def _draw_environment(self):
         """Draw the static environment elements"""
+        self.env.visualize_environment(self.ax)
         # Draw boundary
-        if self.env.boundary:
+        '''        if self.env.boundary:
             xmin, ymin, zmin, xmax, ymax, zmax = self.env.boundary
             vertices = self._create_cube_vertices(xmin, ymin, zmin, xmax, ymax, zmax)
             faces = self._create_cube_faces(vertices)
@@ -526,10 +534,11 @@ class LiveQuadrotorSimulator:
                            'k--', alpha=0.3, linewidth=1)
         
         # Draw obstacles
+        
         for block_coords, block_color in self.env.blocks:
             vertices = self._create_cube_vertices(*block_coords)
             faces = self._create_cube_faces(vertices)
-            
+            print(f"BC: {block_color}")
             poly3d = [[tuple(vertex) for vertex in face] for face in faces]
             self.ax.add_collection3d(Poly3DCollection(poly3d, 
                                                      facecolors=block_color, 
@@ -544,6 +553,7 @@ class LiveQuadrotorSimulator:
         if self.env.goal_point:
             self.ax.scatter(*self.env.goal_point, c='gold', s=150, marker='*', 
                            edgecolors='black', linewidth=2, label='Goal')
+        '''
     
     def _create_cube_vertices(self, xmin, ymin, zmin, xmax, ymax, zmax):
         """Create cube vertices"""

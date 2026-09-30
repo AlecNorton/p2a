@@ -160,6 +160,12 @@ def run_live_simulation(map_file, start=None, goal=None, save_data=False):
     print("Live simulation completed!")
     return True
 
+def live_simulation(map_file, start=None, goal = None, save_data = False):
+    print("Running live simulation.")
+    sim = LiveQuadrotorSimulator(map_file)
+
+    sim.run_live_simulation()
+
 def run_offline_simulation(map_file, start=None, goal=None, save_data=False):
     """Run offline simulation with detailed analysis plots"""
     print("Running offline simulation with analysis...")
@@ -298,6 +304,7 @@ Examples:
                        help='Demonstrate trajectory generation only')
     parser.add_argument('--offline', action='store_true',
                        help='Run offline simulation with analysis plots')
+    parser.add_argument('--live', action='store_true', help = 'Run live video of trajectory generation.')
     
     # Start/goal specification
     parser.add_argument('--start', nargs=3, type=float, metavar=('X', 'Y', 'Z'),
@@ -341,6 +348,9 @@ Examples:
                 goal=args.goal,
                 save_data=args.save_data
             )
+        elif args.live:
+            success = run_live_simulation(args.map_file, start=args.start, goal = args.goal)
+
         
         else:
             # Default: Live real-time simulation

@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from random import random 
+import math
 class RRTNode:
     """Node for RRT* tree"""
     def __init__(self, position, parent=None):
@@ -30,6 +31,12 @@ class PathPlanner:
         self.refinement_iterations = 1000
         self.refinement_flag = True
 
+    def set_vars(self, max_iterations, step_size, goal_radius, search_radius, goal_bias):
+        self.max_iterations = max_iterations
+        self.step_size = step_size
+        self.goal_radius = goal_radius
+        self.search_radius = search_radius
+        self.goal_bias = goal_bias
     
     ############################################################################################################
     #### TODO - Implement RRT* path planning algorithm in 3D (use the provided environment class) ##############
@@ -94,9 +101,7 @@ class PathPlanner:
                 #Determine closest node and generate a point in its step radius based on direction. 
                 random_node = RRTNode(random_point)
                 closest_node= self.find_closest_node(random_node)
-                direction = np.subtract(random_node.position, closest_node.position)
-                direction = direction/np.linalg.norm(direction)
-                new_point = np.add(closest_node.position, np.multiply(direction, self.step_size))
+                new_point = self.steer(random_point, closest_node.position)
                 if(self.euclidian_dist(RRTNode(new_point), closest_node) > self.step_size):
                     #print(f"dist: {self.euclidian_dist(RRTNode(new_point), closest_node)}")
                     pass
@@ -124,19 +129,34 @@ class PathPlanner:
             print(f"Cost of unrefined path: {self.goal_node.cost}")
             return True
 
-    def find_closest_node(self, new_node):
+
+    def steer(self, neighbor_point, sample_point):
+        direction = np.subtract(sample_point, neighbor_point)
+        direction = direction/np.linalg.norm(direction)
+        new_point = np.add(neighbor_point, np.multiply(direction, self.step_size))
+        return new_point
+    
+    def find_closest_node(self, new_node, tree=None):
         smallest_dist = -1
         closestNode = None
-        for node in self.tree_nodes:
+        if(tree is None):
 
-            dist = self.euclidian_dist(new_node, node)
-            if(dist < smallest_dist or smallest_dist == -1):
-                smallest_dist = dist
-                closestNode = node
+            for node in self.tree_nodes:
+
+                dist = self.euclidian_dist(new_node, node)
+                if(dist < smallest_dist or smallest_dist == -1):
+                    smallest_dist = dist
+                    closestNode = node
+        else:
+            for node in tree:
+                dist = self.euclidian_dist(new_node, node)
+                if(dist < smallest_dist or smallest_dist == -1):
+                    smallest_dist = dist
+                    closestNode = node
         return closestNode
 
 
-    def search_for_nodes(self, node1):
+    def find_near_nodes(self, node1):
         neighboring_nodes = []
         for node2 in self.tree_nodes:
             if(self.euclidian_dist(node1, node2) <= self.search_radius):
@@ -144,7 +164,7 @@ class PathPlanner:
         return neighboring_nodes
 
     def rewire(self, node1):
-        neighboring_nodes = self.search_for_nodes(node1)
+        neighboring_nodes = self.find_near_nodes(node1)
         #First "reparent" new node based on distance to starting point. 
         for neighbor in neighboring_nodes:
             if(neighbor.cost + self.euclidian_dist(node1, neighbor) < node1.cost):
@@ -159,7 +179,21 @@ class PathPlanner:
                 if(self.env.is_line_collision_free(neighbor.position, node1.position) == False):
                     continue
                 self.parent_child(node1, neighbor)
-        
+    
+    def is_path_valid(self, pos1, pos2):
+        return self.env.is_line_collision_free(pos1, pos2)
+
+    def choose_parent(self, neighboring_nodes, new_pos):
+        best_parent = None
+        best_cost = math.inf
+        for neighbor in neighboring_nodes:
+            new_cost = neighbor.cost + self.euclidian_dist(neighbor, RRTNode(new_pos))
+            if(new_cost < best_cost):
+                best_parent = neighbor
+                best_cost = neighbor.cost + self.euclidian_dist(new_cost)
+        return best_parent, best_cost
+    
+
 
     def get_waypoints(self, end_node):
 
@@ -170,11 +204,10 @@ class PathPlanner:
             #print("Node has no parent.")
             return np.array([end_node.position])
         else:
-
-
             return np.vstack([np.array([end_node.position]), self.get_waypoints(end_node.parent)])
 
-            
+    def extract_path(self, goal_node):
+        return list(self.get_waypoints(goal_node)).reverse()
 
     
     def euclidian_dist(self, node1: RRTNode, node2:RRTNode):
