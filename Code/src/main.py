@@ -1,4 +1,7 @@
 import argparse
+from pathlib import Path
+import random
+import json
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
@@ -29,16 +32,24 @@ except ImportError as e:
     print("  - simulator.py")
     sys.exit(1)
 
+def tracking_errors(sim):
+    """Compare post-integration states with references at the same timestamps."""
+    positions = np.asarray(sim.state_history)[:, :3]
+    desired = np.array([sim.controller.get_desired_state(t)[0] for t in sim.time_history])
+    return np.linalg.norm(positions-desired, axis=1)
+
 def run_environment_visualization(map_file):
     """Just visualize the environment with start/goal points"""
     print("Running environment visualization mode...")
     
-    env = Environment3D()
-    if not env.parse_map_file(map_file):
+    sim = LiveQuadrotorSimulator(map_file)
+    env = sim.env
+    if not env.boundary:
         print(f"Failed to load map file: {map_file}")
         return False
     
     # Generate start and goal points
+    sim._set_inputs()
     if not env.set_start_goal_points():
         print("Failed to generate start/goal points")
         return False
@@ -54,12 +65,15 @@ def run_path_planning_demo(map_file, start=None, goal=None):
     print(" Running path planning demonstration...")
     
     # Initialize components
-    env = Environment3D()
-    if not env.parse_map_file(map_file):
+    sim = LiveQuadrotorSimulator(map_file)
+    env = sim.env
+    if not env.boundary:
         print(f"Failed to load map file: {map_file}")
         return False
     
     # Set start and goal
+    sim._set_inputs(start, goal)
+    env = sim.planning_env
     if not env.set_start_goal_points(start, goal):
         print(" Failed to set start/goal points")
         return False
@@ -112,10 +126,13 @@ def run_trajectory_demo(map_file, start=None, goal=None):
     print("Running trajectory generation demonstration...")
     
     # Initialize and plan path
-    env = Environment3D()
-    if not env.parse_map_file(map_file):
+    sim = LiveQuadrotorSimulator(map_file)
+    env = sim.env
+    if not env.boundary:
         return False
     
+    sim._set_inputs(start, goal)
+    env = sim.planning_env
     if not env.set_start_goal_points(start, goal):
         return False
     
@@ -125,13 +142,13 @@ def run_trajectory_demo(map_file, start=None, goal=None):
     
     # Generate trajectory
     traj_gen = TrajectoryGenerator(planner.waypoints)
-    result = traj_gen.generate_bspline_trajectory(num_points=200)
+    result = traj_gen.generate_bspline_trajectory(num_points=200, env=env)
     
     if result[0] is not None:
         trajectory_points, time_points, velocities, accelerations = result
         
         # Visualize trajectory
-        traj_gen.visualize_trajectory(trajectory_points, velocities, accelerations)
+        traj_gen.visualize_trajectory(trajectory_points, velocities, accelerations, env=env)
         
         print("Trajectory generation demonstration completed!")
         return True
@@ -155,7 +172,18 @@ def run_live_simulation(map_file, start=None, goal=None, save_data=False):
     
     # Save data if requested
     if save_data:
+        sim.fig.savefig("./log/flight.png",dpi=160)
         sim.save_results()
+        summary = {
+            "stop_reason":sim.stop_reason,"goal_reached":bool(sim.goal_reached),
+            "collision_detected":bool(sim.collision_detected),"simulation_time_s":sim.sim_time,
+            "final_goal_error_m":float(np.linalg.norm(sim.state[:3]-sim.env.goal_point)),
+            "final_speed_mps":float(np.linalg.norm(sim.state[3:6])),
+            "position_rmse_m":float(np.sqrt(np.mean(np.square(tracking_errors(sim))))),
+            "max_position_error_m":float(np.max(tracking_errors(sim))),
+            "start":sim.env.start_point,"goal":sim.env.goal_point,
+        }
+        Path("./log/summary.json").write_text(json.dumps(summary,indent=2))
     
     print("Live simulation completed!")
     return True
@@ -202,11 +230,12 @@ def run_offline_simulation(map_file, start=None, goal=None, save_data=False):
         ax1 = fig.add_subplot(231, projection='3d')
         sim.env.visualize_environment(ax1)
         if sim.trail_positions:
-            trail = np.array(sim.trail_positions)
+            trail = np.array(sim.state_history)[:, :3]
             ax1.plot(trail[:, 0], trail[:, 1], trail[:, 2], 'g-', linewidth=3, label='Actual Path')
         ax1.set_title('Flight Path')
         ax1.legend()
         
+        desired = np.array([sim.controller.get_desired_state(t) for t in sim.time_history])
         # Position vs time
         ax2 = fig.add_subplot(232)
         times = np.array(sim.time_history)
@@ -214,6 +243,8 @@ def run_offline_simulation(map_file, start=None, goal=None, save_data=False):
         ax2.plot(times, states[:, 0], 'r-', label='X')
         ax2.plot(times, states[:, 1], 'g-', label='Y') 
         ax2.plot(times, states[:, 2], 'b-', label='Z')
+        for j,color in enumerate(('r','g','b')):
+            ax2.plot(times,desired[:,0,j],color+'--',label='Desired '+'XYZ'[j])
         ax2.set_xlabel('Time (s)')
         ax2.set_ylabel('Position (m)')
         ax2.set_title('Position vs Time')
@@ -225,6 +256,8 @@ def run_offline_simulation(map_file, start=None, goal=None, save_data=False):
         ax3.plot(times, states[:, 3], 'r-', label='Vx')
         ax3.plot(times, states[:, 4], 'g-', label='Vy')
         ax3.plot(times, states[:, 5], 'b-', label='Vz')
+        for j,color in enumerate(('r','g','b')):
+            ax3.plot(times,desired[:,1,j],color+'--',label='Desired V'+'xyz'[j])
         ax3.set_xlabel('Time (s)')
         ax3.set_ylabel('Velocity (m/s)')
         ax3.set_title('Velocity vs Time')
@@ -274,10 +307,21 @@ def run_offline_simulation(map_file, start=None, goal=None, save_data=False):
     
     # Save data if requested
     if save_data:
+        fig.savefig("./log/tracking.png",dpi=160)
         sim.save_results()
+        summary = {
+            "stop_reason":sim.stop_reason,"goal_reached":bool(sim.goal_reached),
+            "collision_detected":bool(sim.collision_detected),"simulation_time_s":sim.sim_time,
+            "final_goal_error_m":float(np.linalg.norm(sim.state[:3]-sim.env.goal_point)),
+            "final_speed_mps":float(np.linalg.norm(sim.state[3:6])),
+            "position_rmse_m":float(np.sqrt(np.mean(np.square(tracking_errors(sim))))),
+            "max_position_error_m":float(np.max(tracking_errors(sim))),
+            "start":sim.env.start_point,"goal":sim.env.goal_point,
+        }
+        Path("./log/summary.json").write_text(json.dumps(summary,indent=2))
     
     print("Offline simulation completed!")
-    return True
+    return sim.goal_reached and not sim.collision_detected
 
 def main():
     parser = argparse.ArgumentParser(
@@ -293,7 +337,7 @@ Examples:
   python main.py map1.txt --offline --save-data     # Offline analysis with data saving
         """)
     
-    parser.add_argument('map_file', help='Path to the map file (e.g., map1.txt)')
+    parser.add_argument('map_file', nargs='?', default=str(Path(__file__).resolve().parent/'maps'/'map1.txt'), help='Path to the map file (e.g., map1.txt)')
     
     # Mode selection
     parser.add_argument('--visualize-only', action='store_true',
@@ -316,7 +360,10 @@ Examples:
     parser.add_argument('--save-data', action='store_true',
                        help='Save simulation data to files')
     
+    parser.add_argument('--seed', type=int, default=0, help='Reproducible planner seed')
     args = parser.parse_args()
+    np.random.seed(args.seed)
+    random.seed(args.seed)
     
     print("Quadrotor Simulation Framework")
     print("=" * 50)
@@ -349,7 +396,7 @@ Examples:
                 save_data=args.save_data
             )
         elif args.live:
-            success = run_live_simulation(args.map_file, start=args.start, goal = args.goal)
+            success = run_live_simulation(args.map_file, start=args.start, goal=args.goal, save_data=args.save_data)
 
         
         else:

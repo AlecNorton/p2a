@@ -1,3 +1,4 @@
+import copy
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
@@ -31,7 +32,9 @@ class LiveQuadrotorSimulator:
             if not success:
                 print(f"Failed to load map file: {map_file}")
         
-        self.planner = PathPlanner(self.env)
+        self.planning_env = copy.deepcopy(self.env)
+        self.planning_env.tracking_reserve = 0.05
+        self.planner = PathPlanner(self.planning_env)
         self.traj_gen = None
         self.controller = QuadrotorController(drone_params)
         
@@ -55,7 +58,10 @@ class LiveQuadrotorSimulator:
         
         # Simulation status
         self.goal_reached = False
-        self.goal_tolerance = 0.8  # meters
+        self.goal_tolerance = 0.2  # meters; require settling as well as proximity
+        self.goal_speed_tolerance = 0.15
+        self.collision_detected = False
+        self.stop_reason = "not_started"
         self.simulation_active = False
         
         # Visualization elements
@@ -100,143 +106,63 @@ class LiveQuadrotorSimulator:
         
         plt.show()
     
+    def _set_inputs(self, start=None, goal=None):
+        # Keep map1 defaults when valid; otherwise use reproducible interior defaults.
+        lo,hi = np.array(self.env.boundary[:3]),np.array(self.env.boundary[3:])
+        for name, supplied, fraction in (("start_point",start,0.2),("goal_point",goal,0.8)):
+            point = supplied if supplied is not None else getattr(self.env,name)
+            if supplied is None and not self.env.is_point_in_free_space(point):
+                point = lo+(hi-lo)*fraction
+                point[2] = (lo[2]+hi[2])/2
+                if not self.env.is_point_in_free_space(point):
+                    point = self.env.generate_random_free_point()
+            if point is None or not self.env.is_point_in_free_space(point):
+                raise ValueError(f"{name} is invalid with the configured safety margin: {point}")
+            setattr(self.env,name,list(point))
+            setattr(self.planning_env,name,list(point))
+            if not self.planning_env.is_point_in_free_space(point):
+                raise ValueError(f"{name} needs 0.05 m additional obstacle tracking clearance")
+
     def animated_rrt_planning(self, start=None, goal=None):
-        """Show animated RRT* planning process"""
-        print("🎬 Starting animated RRT* planning...")
-        
-        # Print environment information
-        print(self.env.get_environment_info())
-        
-
-        # Verify the points are well-separated
-        start_point = self.env.start_point
-        goal_point = self.env.goal_point
-        distance = np.linalg.norm(np.array(goal_point) - np.array(start_point))
-        
-        print(f"📏 Start-to-goal distance: {distance:.2f} meters")
-
-        # Update title
-        self.ax.set_title('Phase 1: RRT* Path Planning (Building Tree...)')
-        
-        # Custom RRT* with visualization
-        from path_planner import RRTNode
-        start_node = RRTNode(start_point)
-        tree = [start_node]
-        
-        # RRT* parameters - adjust based on environment size
-        max_iterations = min(3000, max(1000, int(distance * 150)))  # Scale with distance
-        step_size = min(1.5, distance / 10)  # Adaptive step size
-        goal_radius = max(0.8, min(1.5, distance / 15))  # Adaptive goal radius
-        search_radius = step_size * 2.5
-        goal_bias = 0.15
-
-        self.planner.set_vars(max_iterations, step_size, goal_radius, search_radius, goal_bias)
-        
-        print(f"🔧 RRT* Parameters:")
-        print(f"   Max iterations: {max_iterations}")
-        print(f"   Step size: {step_size:.2f}m")
-        print(f"   Goal radius: {goal_radius:.2f}m")
-        print(f"   Search radius: {search_radius:.2f}m")
-        
-        goal_node = None
-        update_interval = max(25, max_iterations // 80)  # Adaptive update rate
-        
-        print(f"🚀 Starting RRT* planning from {start_point} to {goal_point}")
-        
-        for iteration in range(max_iterations):
-            # Sample point
-            if np.random.random() < goal_bias:
-                sample_point = np.array(goal_point)
-            else:
-                sample = self.env.generate_random_free_point()
-                if sample is None:
-                    continue
-                sample_point = np.array(sample)
-            
-            # Find nearest node
-            nearest_node = self.planner.find_closest_node(RRTNode(sample_point), tree)
-            if nearest_node is None:
-                print("No nearest node.")
-                continue
-            
-            # Steer towards sample
-            new_position = self.planner.steer(nearest_node.position, sample_point)
-            
-            # Check validity
-            if not self.env.is_point_in_free_space(new_position):
-                print("Colliding point.")
-                continue
-            if not self.env.is_line_collision_free(nearest_node.position, new_position):
-                print("Colliding path")
-                continue
-            
-            # Find near nodes and choose best parent
-            near_nodes = self.planner.find_near_nodes(new_position)
-            best_parent, best_cost = self.planner.choose_parent(near_nodes, new_position)
-            
-            if best_parent is None:
-                if self.planner.is_path_valid(nearest_node.position, new_position):
-                    best_parent = nearest_node
-                    best_cost = nearest_node.cost + self.planner.euclidian_dist(RRTNode(nearest_node.position), RRTNode(new_position))
-                else:
-                    print("path not valid")
-                    continue
-            
-            # Create new node
-            new_node = RRTNode(new_position)
-            new_node.parent = best_parent
-            new_node.cost = best_cost
-            best_parent.children.append(new_node)
-            tree.append(new_node)
-            
-            # Rewire tree
-            self.planner.rewire(new_node)
-            
-            # Check if goal reached
-            goal_distance = self.planner.euclidian_dist(RRTNode(new_position), RRTNode(goal_point))
-            if goal_distance <= goal_radius:
-                print("Occurring???")
-                if self.planner.is_path_valid(new_position, goal_point):
-                    goal_node = RRTNode(goal_point)
-                    goal_node.parent = new_node
-                    goal_node.cost = new_node.cost + goal_distance
-                    new_node.children.append(goal_node)
-                    tree.append(goal_node)
-                    print(f"Goal reached at iteration {iteration}! Final cost: {goal_node.cost:.2f}")
-                    break
-            
-            # Update visualization periodically
-            if iteration % update_interval == 0:
-                self._update_rrt_visualization(tree, iteration, max_iterations)
-                time.sleep(0.03)  # Small delay for animation effect
-        
-        # Final visualization update
-        self._update_rrt_visualization(tree, iteration, max_iterations, final=True)
-        
-        # Store results
-        self.planner.tree_nodes = tree
-        
-        if goal_node is not None:
-            self.planner.waypoints = self.planner.extract_path(goal_node)
-            original_waypoints = len(self.planner.waypoints)
-            self.planner.waypoints = self.planner.simplify_path(self.planner.waypoints)
-            simplified_waypoints = len(self.planner.waypoints)
-            
-            print(f"   RRT* planning successful!")
-            print(f"   Original path: {original_waypoints} waypoints")
-            print(f"   Simplified path: {simplified_waypoints} waypoints")
-            print(f"   Path cost: {goal_node.cost:.2f} meters")
-            print(f"   Tree size: {len(tree)} nodes")
-            
-            # Show final path
-            self._show_final_rrt_path()
-            return True
-        else:
-            print(f"RRT* planning failed after {max_iterations} iterations")
-            print(f"   Tree size: {len(tree)} nodes")
-            print("   Try increasing max_iterations or adjusting parameters")
+        self._set_inputs(start,goal)
+        self.ax.set_title("Phase 1: RRT* planning")
+        if not self.planner.plan_path(on_expand=self._update_rrt_visualization):
             return False
-    
+        self._show_final_rrt_path()
+        self.planning_complete = True
+        return True
+
+    def _generate_reference(self):
+        self.traj_gen = TrajectoryGenerator(self.planner.waypoints)
+        result = self.traj_gen.generate_bspline_trajectory(env=self.planning_env)
+        self.controller.set_trajectory(*result)
+        self.max_sim_time = self.traj_gen.trajectory_duration + 10.0
+        self.trajectory_complete = True
+        return result
+
+    def _reset_execution(self):
+        self.controller = QuadrotorController(drone_params)
+        self.state = np.zeros(13)
+        self.state[:3] = self.env.start_point
+        self.state[9] = 1.0  # Existing dynamics use scalar-first [0,0,0,1] = yaw pi.
+        self.sim_time = 0.0
+        self.state_history, self.time_history, self.control_history = [],[],[]
+        self.trail_positions = [self.state[:3].copy()]
+        self.goal_reached = self.collision_detected = False
+        self.stop_reason = "running"
+
+    def initialize_simulation(self, start=None, goal=None):
+        """Offline initialization uses the same planner/reference as live mode."""
+        self._set_inputs(start,goal)
+        self._reset_execution()
+        if not self.planner.plan_path():
+            self.stop_reason = "planning_failed"
+            return False
+        self.planning_complete = True
+        self._generate_reference()
+        self.execution_started = True
+        return True
+
     def _update_rrt_visualization(self, tree, iteration, max_iterations, final=False):
         """Update RRT* tree visualization"""
         # Clear previous tree visualization
@@ -294,30 +220,26 @@ class LiveQuadrotorSimulator:
         self.planning_complete = True
     
     def show_bspline_trajectory(self):
-        """Show B-spline trajectory generation"""
-        print("Generating B-spline trajectory...")
+        """Show Quintic trajectory generation"""
+        print("Generating Quintic trajectory...")
         
-        self.ax.set_title('Phase 2: B-spline Trajectory Generation...')
+        self.ax.set_title('Phase 2: Quintic Trajectory Generation...')
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
         
         # Generate trajectory
-        self.traj_gen = TrajectoryGenerator(self.planner.waypoints)
-        self.traj_gen.trajectory_duration = min(20.0, len(self.planner.waypoints) * 2.0)
-        
-        num_points = int(self.traj_gen.trajectory_duration / self.dt)
-        result = self.traj_gen.generate_bspline_trajectory(num_points=num_points)
-        
+        result = self._generate_reference()
+
         if result[0] is not None:
             trajectory_points, time_points, velocities, accelerations = result
             self.controller.set_trajectory(trajectory_points, time_points, velocities, accelerations)
-            self.max_sim_time = self.traj_gen.trajectory_duration + 5.0
+            self.max_sim_time = self.traj_gen.trajectory_duration + 10.0
             
-            # Draw B-spline trajectory
+            # Draw Quintic trajectory
             # Sample trajectory for visualization
             traj_sample = trajectory_points[::5]  # Every 5th point
             self.bspline_line, = self.ax.plot(traj_sample[:, 0], traj_sample[:, 1], traj_sample[:, 2], 
-                                            'g-', linewidth=3, alpha=0.8, label='B-spline Trajectory')
+                                            'g-', linewidth=3, alpha=0.8, label='Quintic Trajectory')
             
             # Add velocity vectors at key points
             vector_sample = max(1, len(trajectory_points) // 20)
@@ -328,7 +250,7 @@ class LiveQuadrotorSimulator:
                              vel[0], vel[1], vel[2], 
                              color='orange', alpha=0.7, arrow_length_ratio=0.1)
             
-            self.ax.set_title('Phase 2: B-spline Trajectory - COMPLETE!')
+            self.ax.set_title('Phase 2: Quintic Trajectory - COMPLETE!')
             self.ax.legend()
             self.fig.canvas.draw()
             self.fig.canvas.flush_events()
@@ -390,6 +312,10 @@ class LiveQuadrotorSimulator:
         sol = solve_ivp(dynamics, [self.sim_time, self.sim_time + self.dt], 
                        self.state, method='RK45')
         
+        previous_position = self.state[:3].copy()
+        if not sol.success or not np.isfinite(sol.y[:,-1]).all():
+            self.stop_reason = "integration_failed"
+            raise RuntimeError("Dynamics integration failed")
         self.state = sol.y[:, -1]
         self.sim_time += self.dt
         
@@ -406,22 +332,29 @@ class LiveQuadrotorSimulator:
         if len(self.trail_positions) > self.max_trail_length:
             self.trail_positions.pop(0)
         
-        # Check goal reached
-        if self.env.goal_point is not None:
-            goal_distance = np.linalg.norm(current_pos - np.array(self.env.goal_point))
-            if goal_distance < self.goal_tolerance and not self.goal_reached:
-                self.goal_reached = True
-                print(f"\n GOAL REACHED at time {self.sim_time:.2f}s!")
-                print(f"Final distance to goal: {goal_distance:.3f}m")
-                return False
-        
-        # Check time limit
-        if self.sim_time >= self.max_sim_time:
-            print(f"\n Simulation time limit reached: {self.sim_time:.2f}s")
+        # Flight safety must be checked before awarding goal success.
+        if not self.env.is_line_collision_free(previous_position,current_pos):
+            self.collision_detected = True
+            self.stop_reason = "collision"
+            self.simulation_active = False
+            print(f"Collision envelope violated at {self.sim_time:.2f}s")
             return False
-        
+        reference_done = self.sim_time >= self.controller.time_points[-1]
+        goal_distance = np.linalg.norm(current_pos-np.array(self.env.goal_point))
+        speed = np.linalg.norm(self.state[3:6])
+        if reference_done and goal_distance <= self.goal_tolerance and speed <= self.goal_speed_tolerance:
+            self.goal_reached = True
+            self.stop_reason = "goal_reached"
+            self.simulation_active = False
+            print(f"Goal reached and settled at {self.sim_time:.2f}s; error {goal_distance:.3f} m")
+            return False
+        if self.sim_time >= self.max_sim_time:
+            self.stop_reason = "time_limit"
+            self.simulation_active = False
+            print(f"Simulation time limit reached at {self.sim_time:.2f}s")
+            return False
         return True
-    
+
     def update_execution_visualization(self):
         """Update the execution visualization"""
         if not hasattr(self, 'drone_point') or self.drone_point is None:
@@ -452,11 +385,13 @@ class LiveQuadrotorSimulator:
         """
         Run the complete simulation showing all phases:
         1. RRT* planning (animated)
-        2. B-spline trajectory generation
+        2. Quintic trajectory generation
         3. Trajectory execution
         """
         print(" Starting complete quadrotor simulation with all phases...")
         
+        self._set_inputs(start,goal)
+        self._reset_execution()
         # Setup visualization
         self.setup_visualization()
         
@@ -464,7 +399,7 @@ class LiveQuadrotorSimulator:
         if not self.animated_rrt_planning(start, goal):
             return False
         
-        # Phase 2: B-spline Trajectory Generation
+        # Phase 2: Quintic Trajectory Generation
         if not self.show_bspline_trajectory():
             return False
         
@@ -516,7 +451,7 @@ class LiveQuadrotorSimulator:
         plt.ioff()
         plt.show()
         
-        return True
+        return self.goal_reached and not self.collision_detected
     
     # Keep all the other methods from before (environment drawing, results, etc.)
     def _draw_environment(self):
@@ -583,23 +518,23 @@ class LiveQuadrotorSimulator:
         
         print(f"   PHASE SUMMARY:")
         print(f"   Phase 1: RRT* Planning - {len(self.planner.waypoints)} waypoints")
-        print(f"   Phase 2: B-spline Trajectory - {len(self.controller.trajectory_points) if self.controller.trajectory_points is not None else 0} points")
+        print(f"   Phase 2: Quintic Trajectory - {len(self.controller.trajectory_points) if self.controller.trajectory_points is not None else 0} points")
         print(f"   Phase 3: Execution - {self.sim_time:.2f}s")
         
         if self.env.goal_point is not None:
             goal_distance = np.linalg.norm(final_pos - np.array(self.env.goal_point))
             start_goal_dist = np.linalg.norm(np.array(self.env.goal_point) - np.array(self.env.start_point))
-            success_rate = max(0, (1 - goal_distance / start_goal_dist) * 100)
+            success_rate = max(0, (1-goal_distance/max(start_goal_dist,1e-9))*100)
             
             print(f"\n EXECUTION RESULTS:")
             print(f"   Status: {' GOAL REACHED' if self.goal_reached else ' NOT REACHED'}")
             print(f"   Final distance to goal: {goal_distance:.3f} m")
-            print(f"   Success rate: {success_rate:.1f}%")
+            print(f"   Goal-distance progress: {success_rate:.1f}% (not a trial success rate)")
         
         print(f"\n PERFORMANCE:")
         print(f"   Execution time: {self.sim_time:.2f} s")
         print(f"   Final position: [{final_pos[0]:.2f}, {final_pos[1]:.2f}, {final_pos[2]:.2f}]")
-        print(f"   Path length: {len(self.trail_positions)} points")
+        print(f"   Stop reason: {self.stop_reason}")
         
         if self.controller.position_errors:
             mean_pos_error = np.mean(self.controller.position_errors)
@@ -608,6 +543,50 @@ class LiveQuadrotorSimulator:
         
         print("="*60)
     
+    def save_tracking_plots(self, filename_prefix='complete_simulation'):
+        """Export aligned desired/actual traces and complete paths for the report."""
+        if not self.state_history:
+            return
+        times = np.array(self.time_history)
+        states = np.array(self.state_history)
+        refs = np.array([self.controller.get_desired_state(t) for t in times])
+        fig, axes = plt.subplots(2,3,figsize=(12,7),sharex=True)
+        for j,axis in enumerate('XYZ'):
+            for row in range(2):
+                ax = axes[row,j]
+                ax.plot(times,refs[:,row,j],'--',color='tab:blue',label='Desired')
+                ax.plot(times,states[:,j+3*row],color='tab:orange',label='Actual')
+                ax.set_title(axis+(' position' if row==0 else ' velocity'))
+                ax.set_ylabel('Position (m)' if row==0 else 'Velocity (m/s)')
+                ax.grid(alpha=0.3);ax.legend()
+                if row==1:ax.set_xlabel('Time (s)')
+        fig.suptitle(f'Trajectory tracking: {self.stop_reason}')
+        fig.tight_layout()
+        fig.savefig(f'./log/{filename_prefix}_tracking.png',dpi=180)
+        plt.close(fig)
+        fig = plt.figure(figsize=(12,5))
+        ax = fig.add_subplot(121,projection='3d')
+        self.env.visualize_environment(ax)
+        points = self.controller.trajectory_points
+        ax.plot(*points.T,'--',color='tab:blue',label='Desired')
+        ax.plot(*states[:,:3].T,color='tab:orange',label='Actual')
+        ax.set_xlabel('X (m)');ax.set_ylabel('Y (m)');ax.set_zlabel('Z (m)');ax.legend()
+        ax.set_title('Flight path: oblique view')
+        top = fig.add_subplot(122)
+        from matplotlib.patches import Rectangle
+        for bounds, rgb in self.env.blocks:
+            top.add_patch(Rectangle(bounds[:2],bounds[3]-bounds[0],bounds[4]-bounds[1],
+                facecolor=np.array(rgb)/255,alpha=.25))
+        top.plot(points[:,0],points[:,1],'--',color='tab:blue',label='Desired')
+        top.plot(states[:,0],states[:,1],color='tab:orange',label='Actual')
+        top.set_xlabel('X (m)');top.set_ylabel('Y (m)');top.set_title('Top projection (obstacle heights omitted)')
+        top.set_aspect('equal',adjustable='datalim');top.legend();fig.tight_layout()
+        fig.savefig(f'./log/{filename_prefix}_path.png',dpi=180);plt.close(fig)
+        fig=plt.figure(figsize=(8,6));ax=fig.add_subplot(111,projection='3d')
+        self.env.visualize_environment(ax);self.planner.visualize_tree(ax)
+        ax.set_title('Explored RRT* tree and selected path');fig.tight_layout()
+        fig.savefig(f'./log/{filename_prefix}_tree.png',dpi=160);plt.close(fig)
+
     def save_results(self, filename_prefix='complete_simulation'):
         """Save complete simulation results"""
         import scipy.io
@@ -620,6 +599,11 @@ class LiveQuadrotorSimulator:
             'bspline_trajectory': self.controller.trajectory_points,
             'executed_trail': np.array(self.trail_positions),
             'goal_reached': self.goal_reached,
+            'collision_detected': self.collision_detected,
+            'stop_reason': self.stop_reason,
+            'reference_time': self.controller.time_points,
+            'reference_velocity': self.controller.trajectory_velocities,
+            'reference_acceleration': self.controller.trajectory_accelerations,
             'sim_time': self.sim_time,
             'start_point': np.array(self.env.start_point),
             'goal_point': np.array(self.env.goal_point)
@@ -627,4 +611,5 @@ class LiveQuadrotorSimulator:
         
         filename = f'./log/{filename_prefix}.mat'
         scipy.io.savemat(filename, data)
+        self.save_tracking_plots(filename_prefix)
         print(f" Complete simulation results saved to {filename}")
