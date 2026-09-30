@@ -219,6 +219,8 @@ class Trajectory:
 
     @property
     def duration(self):
+        if self.alpha<1:
+            self.alpha=1
         return self.alpha * self.base_duration
 
     def sample(self, t):
