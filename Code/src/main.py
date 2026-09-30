@@ -95,7 +95,7 @@ def run_path_planning_demo(map_file, start=None, goal=None):
     if planner.waypoints:
         waypoints = np.array(planner.waypoints)
         ax3.plot(waypoints[:, 0], waypoints[:, 1], waypoints[:, 2], 
-                'ro-', markersize=8, linewidth=3, label='Final Path')
+                'go-', markersize=8, linewidth=3, label='Final Path')
         ax3.legend()
     ax3.set_title('Final Path')
     ax3.set_xlim((env.boundary[0], env.boundary[3]))
