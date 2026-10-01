@@ -121,11 +121,12 @@ class PathPlanner:
                 if(dist <= self.goal_radius and dist <= np.linalg.norm(self.env.goal_point - self.goal_node.position)):
                     self.goal_node = new_node
             
-            self.waypoints = list(self.get_waypoints(self.goal_node))
+            self.waypoints = self.extract_path(self.goal_node)
             print(f"Cost of refined path: {self.goal_node.cost}")
+            
             return True
         else:
-            self.waypoints = list(self.get_waypoints(self.goal_node))
+            self.waypoints = self.extract_path(self.goal_node)
             print(f"Cost of unrefined path: {self.goal_node.cost}")
             return True
 
@@ -207,7 +208,13 @@ class PathPlanner:
             return np.vstack([np.array([end_node.position]), self.get_waypoints(end_node.parent)])
 
     def extract_path(self, goal_node):
-        return list(self.get_waypoints(goal_node)).reverse()
+        waypoints = list(self.get_waypoints(goal_node))
+        #print(f"Waypoints: {waypoints}")
+        new_waypoints = []
+        for i in reversed(range(len(waypoints))):
+            pt = list(waypoints[i])
+            new_waypoints.append(pt)
+        return new_waypoints
 
     
     def euclidian_dist(self, node1: RRTNode, node2:RRTNode):
@@ -228,6 +235,18 @@ class PathPlanner:
             childNode.cost = parentNode.cost + self.euclidian_dist(parentNode, childNode)
             parentNode.children.append(childNode)
 
+    def simplify_path(self, waypoints):
+        new_waypoints = waypoints.copy()
+        
+        for i in range(0, len(waypoints)-2):
+            firstNode= waypoints[i]
+            secondNode = waypoints[i+1]
+            thirdNode = waypoints[i+2]
+            if(self.env.is_line_collision_free(firstNode, thirdNode, 100)):
+                #Nothing stopping us from connecting directly. 
+                new_waypoints.remove(secondNode)
+                i += 1
+        return new_waypoints
 
 
     

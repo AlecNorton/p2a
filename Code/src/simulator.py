@@ -50,6 +50,7 @@ class LiveQuadrotorSimulator:
         
         # Logging
         self.state_history = []
+        self.desired_history = []
         self.time_history = []
         self.control_history = []
         
@@ -164,10 +165,10 @@ class LiveQuadrotorSimulator:
             
             # Check validity
             if not self.env.is_point_in_free_space(new_position):
-                print("Colliding point.")
+                #print("Colliding point.")
                 continue
             if not self.env.is_line_collision_free(nearest_node.position, new_position):
-                print("Colliding path")
+                #print("Colliding path")
                 continue
             
             # Find near nodes and choose best parent
@@ -195,7 +196,6 @@ class LiveQuadrotorSimulator:
             # Check if goal reached
             goal_distance = self.planner.euclidian_dist(RRTNode(new_position), RRTNode(goal_point))
             if goal_distance <= goal_radius:
-                print("Occurring???")
                 if self.planner.is_path_valid(new_position, goal_point):
                     goal_node = RRTNode(goal_point)
                     goal_node.parent = new_node
@@ -221,7 +221,8 @@ class LiveQuadrotorSimulator:
             original_waypoints = len(self.planner.waypoints)
             self.planner.waypoints = self.planner.simplify_path(self.planner.waypoints)
             simplified_waypoints = len(self.planner.waypoints)
-            
+            #print(f"Waypoints: {self.planner.waypoints}")
+
             print(f"   RRT* planning successful!")
             print(f"   Original path: {original_waypoints} waypoints")
             print(f"   Simplified path: {simplified_waypoints} waypoints")
@@ -346,6 +347,7 @@ class LiveQuadrotorSimulator:
         
         # Set initial state
         self.state[0:3] = self.env.start_point
+        print(f"Start Point: {self.state[0:3]}")
         self.state[3:6] = 0  # Zero initial velocity
         self.state[6:10] = [0, 0, 0, 1]  # Identity quaternion
         self.state[10:13] = 0  # Zero angular rates
@@ -378,8 +380,8 @@ class LiveQuadrotorSimulator:
             return False
         
         # Get control input
-        control_input = self.controller.compute_control(self.state, self.sim_time)
-        
+        control_input, desired_state = self.controller.compute_control(self.state, self.sim_time)
+    
         # Dynamics integration
         def dynamics(t, x):
             return model_derivative(t, x.reshape(-1, 1), 
@@ -394,7 +396,9 @@ class LiveQuadrotorSimulator:
         self.sim_time += self.dt
         
         # Log data
+
         self.state_history.append(self.state.copy())
+        self.desired_history.append(list(desired_state).copy())
         self.time_history.append(self.sim_time)
         self.control_history.append(control_input.copy())
         
@@ -513,6 +517,48 @@ class LiveQuadrotorSimulator:
         
         # Keep plot open
         print("\n Simulation complete. Close plot window to continue...")
+        desired_pos = np.array(self.controller.trajectory_points)
+        #print(f"Desired Pos: {self.controller.trajectory_points}")
+        desired_vel =np.array(self.controller.trajectory_velocities)
+        #print(f"State History: {self.state_history}")
+        state_hist = np.array(self.state_history)
+        actual_pos = state_hist[:, 0:3]
+        actual_vel = state_hist[:, 3:6]
+        desired_hist = np.array(self.desired_history)
+
+        #ACTUAL IS ACTUAL OUTPUT
+        #DESIRED POS IS TRAJECTORY POINTS
+        #DE
+        for i in range(0, 3):
+            fig = plt.figure()
+            ax = fig.add_subplot()
+            actual = actual_pos[:, i]
+            desired = desired_pos[:, i]
+            ax.plot(self.time_history, actual, label = 'Actual')
+            ax.plot(self.controller.time_points, desired, '--', label = 'Desired')
+            if(i == 0):
+                ax.set_title('Pos - X')
+            elif(i == 1):
+                ax.set_title('Pos - Y')
+            else:
+                ax.set_title('Pos - Z')
+            ax.legend()
+
+        for i in range(0, 3):
+            fig = plt.figure()
+            ax = fig.add_subplot()
+            actual = actual_pos[:, i]
+            desired = desired_pos[:, i]
+            ax.plot(self.time_history, actual, label = 'Actual')
+            ax.plot(self.controller.time_points, desired, '--', label = 'Desired')
+            if(i == 0):
+                ax.set_title('Velocity  - X')
+            elif(i == 1):
+                ax.set_title('Velocity - Y')
+            else:
+                ax.set_title('Velocity - Z')
+            ax.legend()
+        
         plt.ioff()
         plt.show()
         

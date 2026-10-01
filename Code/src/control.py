@@ -310,6 +310,7 @@ class QuadrotorController:
         waypoint = np.append(pos_des, 0.0)  # Zero yaw
         
         # Use the controller
+        
         try:
             control_input = self.controller.step(current_state, waypoint, vel_des, acc_des)
         except Exception as e:
@@ -324,11 +325,11 @@ class QuadrotorController:
         
         pos_error = np.linalg.norm(current_pos - pos_des)
         vel_error = np.linalg.norm(current_vel - vel_des)
-        
+        #
         self.position_errors.append(pos_error)
         self.velocity_errors.append(vel_error)
-        
-        return control_input
+
+        return control_input, np.append(np.array(pos_des), np.array(vel_des))
     
     def reset_metrics(self):
         """Reset performance tracking"""

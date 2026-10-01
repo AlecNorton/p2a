@@ -14,8 +14,8 @@ splines
         self.trajectory_duration = None  # seconds
         self.max_velocity = None  # m/s
         self.max_acceleration = None  # m/s^2
-        self.vmax=1
-        self.amax=2
+        self.vmax=20
+        self.amax=3
         self.f=0.45
 
     ##############################################################
@@ -36,11 +36,7 @@ splines
         ############## IMPLEMENTATION STARTS HERE ##############
 
         wp = np.array(self.waypoints, dtype=float)
-        if env is not None and len(wp) >= 2:
-            if (np.linalg.norm(wp[0] - np.array(env.start_point))> np.linalg.norm(wp[-1] - np.array(env.start_point))):
-                wp = wp[::-1] #reordering seq because result was goal->start but we want opp
-        elif len(wp) >= 2:
-            wp = wp[::-1]   
+        
         traj = generate_trajectory(wp,vmax,amax,self.f,env,verbose=verbose)
         self.trajectory_duration = traj.duration
         self.max_velocity = vmax
@@ -219,6 +215,8 @@ class Trajectory:
 
     @property
     def duration(self):
+        if(self.alpha < 1):
+            self.alpha = 1
         return self.alpha * self.base_duration
 
     def sample(self, t):
