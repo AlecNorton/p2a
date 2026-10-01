@@ -12,7 +12,6 @@ class Environment3D:
         self.start_point = [5, -4.5, 1]
         self.goal_point = [5, 19, 3]
         self.safety_margin = 0.5  # Safety margin around obstacles
-        self.tracking_reserve = 0.0  # Optional extra obstacle clearance for references
 
 
     def set_start_goal_points(self, start=None, goal=None):
@@ -75,12 +74,10 @@ class Environment3D:
         """
         #Accept a single point (3,) or a batch of points (N, 3).
         pts = np.atleast_2d(np.asarray(point, dtype=float))
-        if pts.shape[1] != 3 or not np.isfinite(pts).all():
-            return False
         if(self.is_point_in_boundary(pts) == False):
             return False
         px, py, pz = pts[:, 0], pts[:, 1], pts[:, 2]
-        m = self.safety_margin + self.tracking_reserve
+        m = self.safety_margin
         for block_and_color in self.blocks:
             xmin, ymin, zmin, xmax, ymax, zmax = block_and_color[0]
             in_block = ((px >= xmin - m) & (px <= xmax + m) &
@@ -95,8 +92,6 @@ class Environment3D:
         True if point is within boundary plus some safety_margin.
         False if point is beyond bondary. """
         pts = np.atleast_2d(np.asarray(point, dtype=float))
-        if pts.shape[1] != 3 or not np.isfinite(pts).all():
-            return False
         px, py, pz = pts[:, 0], pts[:, 1], pts[:, 2]
         m = self.safety_margin
         xmin, ymin, zmin, xmax, ymax, zmax = self.boundary
@@ -112,28 +107,42 @@ class Environment3D:
     #### TODO - Implement line - collision checking #####
     ##############################################
     def is_line_collision_free(self, p1, p2, num_checks=100):
-        """Exact segment versus expanded AABBs; touching an obstacle is collision."""
-        a, b = np.asarray(p1,dtype=float),np.asarray(p2,dtype=float)
-        if a.shape != (3,) or b.shape != (3,) or not np.isfinite([a,b]).all():
+        """
+        Check if a line segment between two points is collision-free
+        Used for RRT* edge validation
+        return True if free, False if in collision
+        """
+        #print(f"First Point: {p1}, second point: {p2}")
+        #First simply check two points.
+        if(self.is_point_in_free_space(p1) == False or self.is_point_in_free_space(p2) == False):
+            #print("Returning False Here.")
             return False
-        if not self.is_point_in_free_space(a) or not self.is_point_in_free_space(b):
-            return False
-        direction = b-a
-        for coords, _ in self.blocks:
-            lo = np.asarray(coords[:3])-(self.safety_margin+self.tracking_reserve)
-            hi = np.asarray(coords[3:])+(self.safety_margin+self.tracking_reserve)
-            entry, leave = 0.0,1.0
-            for j in range(3):
-                if abs(direction[j]) < 1e-14:
-                    if a[j] < lo[j] or a[j] > hi[j]:
-                        entry,leave = 1.0,0.0
-                        break
-                else:
-                    v = sorted(((lo[j]-a[j])/direction[j],(hi[j]-a[j])/direction[j]))
-                    entry,leave = max(entry,v[0]),min(leave,v[1])
-            if entry <= leave:
-                return False
-        return True
+        
+        else:
+            p1x, p1y, p1z = p1
+            p2x, p2y, p2z = p2
+            dist_vec = np.abs(np.subtract(p2, p1))
+            total_dist = np.linalg.norm(dist_vec)
+            xDir = 1
+            yDir = 1
+            zDir = 1
+            if(p1x >= p2x):
+                xDir = -1
+            if(p1y >= p2y):
+                yDir = -1
+            if(p1z >= p2z):
+                zDir = -1
+            #num checks per one meter, i.e. 20 checks is a point every 5 cm. 
+            
+            x_check, y_check, z_check = np.divide(dist_vec, num_checks)
+            #print(f"Check Dist: {[x_check, y_check, z_check]}")
+            #print(f"Core Dist: {[x_core, y_core, z_core]}")
+
+            step = np.array([xDir*x_check, yDir*y_check, zDir*z_check])
+            steps = np.arange(1, num_checks + 1).reshape(-1, 1)
+            allPoints = np.array(p1) + steps * step
+            return bool(self.is_point_in_free_space(allPoints))
+                            
 
     def visualize_environment(self, ax=None, show_start_goal = False):
         """Visualize the environment"""
@@ -159,7 +168,7 @@ class Environment3D:
             ax.scatter(self.start_point[0], self.start_point[1], self.start_point[2], s=100, color= 'red', marker = '*')
             ax.scatter(self.goal_point[0], self.goal_point[1], self.goal_point[2], s=100, color= 'blue', marker = 'X')
 
-        poly = Poly3DCollection(verts, alpha = .3)
+        poly = Poly3DCollection(verts, alpha = .9)
         poly.set_facecolor(colors)
         poly.set_edgecolor('black')
         ax.add_collection(poly)
