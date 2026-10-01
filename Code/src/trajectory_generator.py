@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.interpolate import splprep, splev, BSpline
 import matplotlib.pyplot as plt
 
 class TrajectoryGenerator:
@@ -23,7 +24,7 @@ splines
     #### TODO - Add member functions as needed ###################
     ##############################################################
 
-    def generate_bspline_trajectory(self, num_points=None, vmax=1.0, amax=1.0,
+    def generate_bspline_trajectory(self, num_points, vmax=2, amax=4,
                                     env=None, verbose=True):
         
         print("Generating spline trajectory...")
@@ -38,43 +39,19 @@ splines
         if env is not None and len(wp) >= 2:
             if (np.linalg.norm(wp[0] - np.array(env.start_point))> np.linalg.norm(wp[-1] - np.array(env.start_point))):
                 wp = wp[::-1] #reordering seq because result was goal->start but we want opp
-        # Without an environment, the public interface expects start-to-goal input.   
-        # Try smaller corner blends if the original rounding cannot clear obstacles.
-        for blend_fraction in (self.f, 0.25, 0.10, 0.03):
-            try:
-                traj = generate_trajectory(wp,vmax,amax,blend_fraction,env,verbose=verbose)
-                break
-            except RuntimeError:
-                if blend_fraction == 0.03:
-                    # Conservative fallback: stop at each waypoint on validated straight edges.
-                    if env is not None and any(not env.is_line_collision_free(a,b)
-                                               for a,b in zip(wp[:-1],wp[1:])):
-                        raise RuntimeError("No safe straight-segment fallback")
-                    pieces = []
-                    for a,b in zip(wp[:-1],wp[1:]):
-                        length = np.linalg.norm(b-a)
-                        if length > 1e-8:
-                            pieces.append(_Straight(max(length/V_AVG,0.1),
-                                [0,0,0,length,0,0],a,(b-a)/length))
-                    if not pieces:
-                        pieces = [_Blend(0.1,[[x,0,0,x,0,0] for x in wp[0]])]
-                    traj = Trajectory(pieces,3)
-                    _apply_dynamic_limits(traj,vmax,amax)
-                    if verbose:
-                        print("[traj] using collision-checked rest-to-rest straight segments")
+        elif len(wp) >= 2:
+            wp = wp[::-1]   
+        traj = generate_trajectory(wp,vmax,amax,self.f,env,verbose=verbose)
         self.trajectory_duration = traj.duration
         self.max_velocity = vmax
         self.max_acceleration = amax
 
-        # Resolve even short pieces directly at controller time; retain exact endpoint.
-        time_points = np.r_[np.arange(0.0,traj.duration,0.02),traj.duration]
-        trajectory_points, velocities, accelerations = traj.sample(time_points)
+        time_points, trajectory_points, velocities, accelerations = traj.sample_grid(int(num_points))
         return trajectory_points, time_points, velocities, accelerations
 
     def visualize_trajectory(self, trajectory_points=None, velocities=None,
-                           accelerations=None, ax=None, env=None):
-        """Visualize the trajectory with velocity and acceleration vectors.
-        Pass env to also draw the obstacles / boundary / start-goal."""
+                           accelerations=None, ax=None):
+        """Visualize the trajectory with velocity and acceleration vectors"""
         if ax is None:
             fig = plt.figure(figsize=(15, 5))
             ax1 = fig.add_subplot(131, projection='3d')
@@ -86,14 +63,6 @@ splines
             standalone = False
 
         if trajectory_points is not None:
-            # Draw the environment (obstacles + start/goal) underneath the path
-            if env is not None:
-                env.visualize_environment(ax1, show_start_goal=True)
-                if env.boundary:
-                    ax1.set_xlim(env.boundary[0], env.boundary[3])
-                    ax1.set_ylim(env.boundary[1], env.boundary[4])
-                    ax1.set_zlim(env.boundary[2], env.boundary[5])
-
             # Plot 3D trajectory
             ax1.plot(trajectory_points[:, 0], trajectory_points[:, 1],
                     trajectory_points[:, 2], 'b-', linewidth=2, label='Spline Trajectory')
@@ -456,29 +425,35 @@ def _build_pieces(W, straights, corners, x, dim):
 # ============================================================================
 def _apply_dynamic_limits(traj, vmax, amax, n=2000):
     """alpha = max(v_peak/vmax, sqrt(a_peak/amax)); scale ALL times once."""
-    ts = np.unique(np.concatenate([np.linspace(lo,hi,201)
-        for lo,hi in zip(traj._cum[:-1],traj._cum[1:])]))
+    ts = np.linspace(0.0, traj.base_duration, n)
     _, vel, acc = traj.sample(ts)                      # alpha == 1 here
     v_peak = float(np.max(np.linalg.norm(vel, axis=1))) if len(vel) else 0.0
     a_peak = float(np.max(np.linalg.norm(acc, axis=1))) if len(acc) else 0.0
     alpha = max(v_peak/vmax if vmax > 0 else 0.0,
                 np.sqrt(a_peak/amax) if amax > 0 else 0.0)
-    traj.alpha = max(1.0, alpha * 1.05)
-    return v_peak/traj.alpha, a_peak/(traj.alpha**2)
+    traj.alpha = alpha if alpha > 1e-9 else 1.0
+    return v_peak, a_peak
 
 
 # ============================================================================
 # COLLISION CHECK + REACTIVE INSERTION
 # ============================================================================
 def _first_collision(traj, env):
-    """Check every piece with dense local samples and exact segment checks."""
-    for i,piece in enumerate(traj.pieces):
-        ts = np.linspace(0,piece.T,max(101,int(np.ceil(piece.T*V_AVG/0.01))+1))
-        positions,_,_ = piece.eval(ts)
-        if not env.is_point_in_free_space(positions):
-            return i
-        if any(not env.is_line_collision_free(a,b) for a,b in zip(positions[:-1],positions[1:])):
-            return i
+    """Dense arc-length sampling; returns index of colliding piece, else None."""
+    total_len = sum(p.T*V_AVG for p in traj.pieces) + 1e-6   # base-time length est.
+    n = max(50, int(total_len / (COLLISION_STEP*0.5)))
+    tau = np.linspace(0.0, traj.base_duration, n)
+    # sample in BASE time (alpha=1) so tau maps straight back to piece boundaries
+    saved, traj.alpha = traj.alpha, 1.0
+    pos, _, _ = traj.sample(tau)
+    traj.alpha = saved
+
+    if env.is_point_in_free_space(pos):           # batch: True iff ALL free
+        return None
+    for i in range(len(pos)):                     # locate first offending sample
+        if not env.is_point_in_free_space(pos[i]):
+            idx = int(np.searchsorted(traj._cum, tau[i], side='right') - 1)
+            return int(np.clip(idx, 0, len(traj.pieces)-1))
     return None
 
 
