@@ -17,6 +17,10 @@ splines
         self.vmax=1
         self.amax=2
         self.f=0.45
+        # interior straight<->blend seam instants + exact v/a magnitudes there
+        self.seam_times = None
+        self.seam_vmag = None
+        self.seam_amag = None
         print(waypoints[0])
         # distance between each consecutive pair of waypoints
         #self.segment_distances = []
@@ -31,6 +35,35 @@ splines
     #### TODO - Add member functions as needed ###################
     ##############################################################
 
+    def waypoint_prune(self, waypoints, env):
+        """Greedy string-pull: from each anchor, jump to the farthest later
+        waypoint reachable by a collision-free straight line, dropping all the
+        bypassed intermediate points. Start and goal are always preserved.
+        Needs env (uses env.is_line_collision_free). Returns the pruned array."""
+        if env is None or len(waypoints) < 3:
+            return np.array(waypoints, dtype=float)
+
+        pts = np.array(waypoints, dtype=float)
+        n = len(pts)
+        pruned = [pts[0]]
+        i = 0
+        while i < n - 1:
+            j = n - 1
+            while j > i + 1:
+                dist = np.linalg.norm(pts[j] - pts[i])
+                checks = max(100, int(dist / 0.05))   # ~5cm resolution on long spans
+                if env.is_line_collision_free(pts[i], pts[j], num_checks=checks):
+                    break
+                j -= 1                                 # pull back until line is free
+            pruned.append(pts[j])
+            i = j
+
+        pruned = np.array(pruned)
+        if len(pruned) < n:
+            print(f"initially {n} points and now {len(pruned)} points")
+            
+        return pruned
+
     def generate_bspline_trajectory(self, num_points, vmax=2, amax=4,
                                     env=None, verbose=True):
         
@@ -42,6 +75,7 @@ splines
 
         ############## IMPLEMENTATION STARTS HERE ##############
 
+        self.waypoints = self.waypoint_prune(self.waypoints, env)
         wp = np.array(self.waypoints, dtype=float)
         if env is not None and len(wp) >= 2:
             if (np.linalg.norm(wp[0] - np.array(env.start_point))> np.linalg.norm(wp[-1] - np.array(env.start_point))):
@@ -52,6 +86,17 @@ splines
         self.trajectory_duration = traj.duration
         self.max_velocity = vmax
         self.max_acceleration = amax
+
+        # interior seams = piece boundaries excluding the global start/end;
+        # recompute exact |v|,|a| at each seam (scaled real time)
+        seam_times = traj._cum[1:-1] * traj.alpha
+        self.seam_times = seam_times
+        if len(seam_times):
+            _, seam_v, seam_a = traj.sample(seam_times)
+            self.seam_vmag = np.linalg.norm(seam_v, axis=1)
+            self.seam_amag = np.linalg.norm(seam_a, axis=1)
+        else:
+            self.seam_vmag = np.array([]); self.seam_amag = np.array([])
 
         time_points, trajectory_points, velocities, accelerations = traj.sample_grid(int(num_points))
         return trajectory_points, time_points, velocities, accelerations
@@ -110,6 +155,9 @@ splines
             ax2.plot(time_points, vel_magnitudes, 'g-', linewidth=2)
             ax2.axhline(y=self.max_velocity, color='r', linestyle='--',
                        label=f'Max Vel: {self.max_velocity} m/s')
+            if self.seam_times is not None and len(self.seam_times):
+                ax2.scatter(self.seam_times, self.seam_vmag, color='red', marker='*',
+                           s=120, zorder=5, label='Straight/blend seams')
             ax2.set_xlabel('Time (s)')
             ax2.set_ylabel('Velocity (m/s)')
             ax2.set_title('Velocity Profile')
@@ -121,6 +169,9 @@ splines
             ax3.plot(time_points, acc_magnitudes, 'm-', linewidth=2)
             ax3.axhline(y=self.max_acceleration, color='r', linestyle='--',
                        label=f'Max Acc: {self.max_acceleration} m/s²')
+            if self.seam_times is not None and len(self.seam_times):
+                ax3.scatter(self.seam_times, self.seam_amag, color='red', marker='*',
+                           s=120, zorder=5, label='Straight/blend seams')
             ax3.set_xlabel('Time (s)')
             ax3.set_ylabel('Acceleration (m/s²)')
             ax3.set_title('Acceleration Profile')
@@ -135,7 +186,7 @@ splines
 
 
 
-V_AVG            = 0.5    # heuristic average speed for time allocation [m/s]
+V_AVG            = 1    # heuristic average speed for time allocation [m/s]
 COLLISION_STEP   = 0.1    # arc-length sample step [m], < env.safety_margin (0.5)
 MAX_REPAIR_ITERS = 5     # cap on reactive-insertion iterations
 _REG             = 1e-9   # tiny Tikhonov regularization for the QP solve
@@ -279,26 +330,29 @@ def _build_geometry(W, f):
     L    = [np.linalg.norm(W[i+1]-W[i]) for i in range(n-1)]
     m    = n - 2                                           # interior corners
 
+    # f may be a scalar (same for all corners) or a per-corner array of length m
+    f_arr = f if np.ndim(f) > 0 else np.full(max(m, 0), float(f))
     d = np.zeros(max(m, 0))
     for k in range(m):
-        d[k] = f * min(L[k], L[k+1])
-    '''
-    # defensive clamp: no straight may have start-cut + end-cut exceed its length
-    for s in range(n-1):
-        d_start = d[s-1] if s >= 1 else 0.0
-        d_end   = d[s]   if s <= n-3 else 0.0
-        if d_start + d_end > L[s] - 1e-9:
-            scale = max(1e-9, (L[s] - 1e-6)) / (d_start + d_end)
-            if s >= 1:    d[s-1] *= scale
-            if s <= n-3:  d[s] *= scale
-'''
+        d[k] = f_arr[k] * min(L[k], L[k+1])
+
     corners = []
     for k in range(m):
         vk = k + 1
         u_in, u_out = tang[k], tang[k+1]
         c_in  = W[vk] - d[k]*u_in
         c_out = W[vk] + d[k]*u_out
-        corners.append(dict(vk=vk, u_in=u_in, u_out=u_out, c_in=c_in, c_out=c_out))
+        u= np.asarray(W[vk]-c_in)
+        v =np.asarray(c_out-W[vk])
+
+        dot_product = np.dot(u, v)
+        norms = np.linalg.norm(u) * np.linalg.norm(v)
+
+        cosine = np.clip(dot_product / norms, -1.0, 1.0)
+        
+        theta=np.arccos(cosine)
+
+        corners.append(dict(vk=vk, u_in=u_in, u_out=u_out, c_in=c_in, c_out=c_out, d=d[k],theta=theta))
 
     # trimmed straight endpoints
     straights = []
@@ -307,7 +361,7 @@ def _build_geometry(W, f):
         p1 = W[s+1] - (d[s]  *tang[s] if s <= n-3   else 0.0)
         straights.append(dict(p0=p0, p1=p1, dir=tang[s],
                               L=float(np.linalg.norm(p1-p0))))
-    return straights, corners, tang, L, d
+    return straights, corners, tang, L
 
 
 # ============================================================================
@@ -327,8 +381,12 @@ def generate_trajectory(waypoints, vmax, amax,f,env=None, verbose=True):
         raise ValueError("waypoints must be (n>=2, d)")
     dim = W.shape[1]
 
+    # per-corner blend fraction; reduced locally when a corner's blend collides
+    m = max(len(W) - 2, 0)
+    f_arr = np.full(m, float(f))
+
     for it in range(MAX_REPAIR_ITERS + 1):
-        straights, corners, _, _, _ = _build_geometry(W, f)
+        straights, corners, _, _ = _build_geometry(W, f_arr)
         x = _solve_min_jerk(W, straights, corners, dim)
         pieces = _build_pieces(W, straights, corners, x, dim)
         traj = Trajectory(pieces, dim)
@@ -340,22 +398,25 @@ def generate_trajectory(waypoints, vmax, amax,f,env=None, verbose=True):
                       f"dur={traj.duration:.2f}s v_peak={v_peak:.2f} a_peak={a_peak:.2f}")
             return traj
 
+        # _first_collision only reports BLEND pieces (straights ride the validated
+        # RRT* corridor and are skipped); None => no blend collision -> accept.
         bad = _first_collision(traj, env)
         if bad is None:
             if verbose:
-                print(f"[traj] collision-free after {it} repair(s). "
+                print(f"[traj] no blend collision after {it} f-reduction(s). "
                       f"waypoints={len(W)} dur={traj.duration:.2f}s "
                       f"v_peak={v_peak:.2f} a_peak={a_peak:.2f}")
             return traj
 
-        newW = _repair_waypoints(W, corners, bad)
-        if newW is None or len(newW) == len(W):
-            raise RuntimeError(f"[traj] corner too tight near piece {bad}; "
+        k = (bad - 1) // 2                      # blend piece -> corner index
+        if f_arr[k] <= 1e-3:
+            raise RuntimeError(f"[traj] corner {k} too tight (f~0) near piece {bad}; "
                                f"cannot repair (iter {it}).")
+
+        f_arr[k] *= 0.5
         if verbose:
-            print(f"[traj] collision at piece {bad}; inserting waypoint "
-                  f"(iter {it+1}), {len(W)} -> {len(newW)} waypoints.")
-        W = newW
+            print(f"[traj] blend collision at piece {bad} -> corner {k}; "
+                  f"reducing f[{k}] to {f_arr[k]:.4f} (iter {it+1}).")
 
     raise RuntimeError(f"[traj] exceeded MAX_REPAIR_ITERS={MAX_REPAIR_ITERS}; "
                        f"corner too tight.")
@@ -398,7 +459,10 @@ def _solve_min_jerk(W, straights, corners, dim):
 
     # --- blends (per axis) ---
     for k, cor in enumerate(corners):
-        T = max(np.linalg.norm(cor['c_out']-cor['c_in'])/V_AVG, 1e-3)
+        blend_upperbound_mult=1.3
+        multiplier=blend_upperbound_mult - ((blend_upperbound_mult-1) / np.pi) * cor['theta']
+
+        T = max(2*cor['d']*multiplier/V_AVG, 1e-3)
         for j in range(dim):
             S = np.zeros((6, nx)); c = np.zeros(6)
             c[0] = cor['c_in'][j]; c[3] = cor['c_out'][j]
@@ -427,7 +491,11 @@ def _build_pieces(W, straights, corners, x, dim):
         pieces.append(_Straight(T, bc, st['p0'], st['dir']))
         if s <= n-3:                                   # blend after straight s
             cor = corners[s]
-            T_b = max(np.linalg.norm(cor['c_out']-cor['c_in'])/V_AVG, 1e-3)
+            blend_upperbound_mult=1.3
+            multiplier=blend_upperbound_mult - ((blend_upperbound_mult-1) / np.pi) * cor['theta']
+    
+            T_b= max(2*cor['d']*multiplier/V_AVG, 1e-3)
+            #T_b = max(np.linalg.norm(cor['c_out']-cor['c_in'])/V_AVG, 1e-3)
             bc_axes = []
             for j in range(dim):
                 bc_axes.append([cor['c_in'][j],
@@ -457,49 +525,27 @@ def _apply_dynamic_limits(traj, vmax, amax, n=2000):
 # COLLISION CHECK + REACTIVE INSERTION
 # ============================================================================
 def _first_collision(traj, env):
-    """Dense arc-length sampling; returns index of colliding piece, else None."""
+    """Returns index of first colliding piece, else None.
+    Samples positions at ~COLLISION_STEP spacing, then checks each consecutive
+    SEGMENT with env.is_line_collision_free (which sub-samples it finely) so a
+    tangential graze at a sharp inflated corner can't slip between point samples.
+    """
     total_len = sum(p.T*V_AVG for p in traj.pieces) + 1e-6   # base-time length est.
-    n = max(50, int(total_len / (COLLISION_STEP*0.5)))
+    n = max(50, int(total_len / COLLISION_STEP))
     tau = np.linspace(0.0, traj.base_duration, n)
     # sample in BASE time (alpha=1) so tau maps straight back to piece boundaries
     saved, traj.alpha = traj.alpha, 1.0
     pos, _, _ = traj.sample(tau)
     traj.alpha = saved
 
-    if env.is_point_in_free_space(pos):           # batch: True iff ALL free
-        return None
-    for i in range(len(pos)):                     # locate first offending sample
-        if not env.is_point_in_free_space(pos[i]):
-            idx = int(np.searchsorted(traj._cum, tau[i], side='right') - 1)
-            return int(np.clip(idx, 0, len(traj.pieces)-1))
+    for i in range(len(pos) - 1):                  # check each segment, finely
+        if not env.is_line_collision_free(pos[i], pos[i + 1]):
+            idx = int(np.clip(int(np.searchsorted(traj._cum, tau[i], side='right') - 1),
+                              0, len(traj.pieces) - 1))
+            if idx % 2 == 1:        # blend piece -> repairable by reducing its f
+                return idx
+            # straight piece -> rides the validated RRT* corridor; skip it
     return None
-
-
-def _repair_waypoints(W, corners, piece_idx):
-    """Insert safe corridor points near the offending corner to shrink its cut.
-    Pieces are ordered S0,B0,S1,B1,... -> blend index = (piece_idx-1)//2."""
-    m = len(corners)
-    if m == 0:
-        return None
-    if piece_idx % 2 == 1:                      # a blend piece
-        k = (piece_idx - 1)//2
-    else:                                       # a straight; blame nearest corner
-        s = piece_idx // 2
-        k = min(max(s-1, 0), m-1) if s >= 1 else 0
-    cor = corners[k]
-    vk = cor['vk']
-    d_half_in  = 0.5*np.linalg.norm(cor['c_in']  - W[vk])
-    d_half_out = 0.5*np.linalg.norm(cor['c_out'] - W[vk])
-    q_in  = W[vk] - d_half_in  * cor['u_in']
-    q_out = W[vk] + d_half_out * cor['u_out']
-    newW = list(W[:vk])
-    if np.linalg.norm(q_in - W[vk]) > 1e-3:
-        newW.append(q_in)
-    newW.append(W[vk])
-    if np.linalg.norm(q_out - W[vk]) > 1e-3:
-        newW.append(q_out)
-    newW.extend(W[vk+1:])
-    return np.array(newW, dtype=float)
 
 
 
